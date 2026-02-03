@@ -152,29 +152,46 @@ class NSE_OI_Scraper(BaseScraper):
         """
         Scrape option chain data for a symbol.
         
-        Uses Chrome DevTools MCP to:
-        1. Navigate to NSE option chain page
-        2. Wait for data to load
-        3. Extract OI data from the table
+        Uses Playwright to:
+        1. Visit home page (to establish session/cookies)
+        2. Fetch internal API data directly
         """
         logger.debug(f"NSE_OI: Scraping option chain for {symbol}")
         
-        # MCP Integration:
-        # 1. mcp_chrome-devtools_navigate_page to option chain URL
-        # 2. mcp_chrome-devtools_wait_for to wait for table load
-        # 3. mcp_chrome-devtools_evaluate_script to extract data
-        
-        # Placeholder structure until MCP integration
-        return {
-            "symbol": symbol,
-            "timestamp": datetime.now().isoformat(),
-            "expiries": [],
-            "calls": [],
-            "puts": [],
-            "pcr": 0.0,
-            "max_pain": 0.0,
-            "note": "MCP integration pending"
-        }
+        try:
+            from playwright.async_api import async_playwright
+            
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                # Use specific user agent to mimic real user
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, right Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = await context.new_page()
+                
+                # 1. Visit Home Page (Crucial for NSE cookies)
+                await page.goto(self.BASE_URL, timeout=30000)
+                
+                # 2. Fetch Option Chain API
+                api_url = f"{self.BASE_URL}{self.OPTION_CHAIN_URL}?symbol={symbol}"
+                
+                # Wait a bit after home page load
+                await asyncio.sleep(1)
+                
+                response = await page.goto(api_url)
+                if not response.ok:
+                    logger.error(f"NSE_OI: API request failed: {response.status}")
+                    await browser.close()
+                    return None
+                    
+                data = await response.json()
+                await browser.close()
+                
+                return data
+
+        except Exception as e:
+            logger.error(f"NSE_OI: Scrape error for {symbol}: {e}")
+            return None
     
     async def _scrape_fii_dii(self) -> Optional[Dict[str, Any]]:
         """

@@ -171,37 +171,83 @@ class BrokerLoginAutomator(BaseAutomator):
         logger.info("BrokerLogin: Starting Fyers login...")
         
         try:
-            # Use Chrome DevTools MCP for login
-            # This will be called via the MCP manager
+            from playwright.async_api import async_playwright
             
-            # Step 1: Navigate to login
-            # mcp_chrome-devtools_navigate_page to Fyers login URL
-            
-            # Step 2: Fill credentials
-            # mcp_chrome-devtools_fill for client_id field
-            # mcp_chrome-devtools_fill for password field
-            
-            # Step 3: Generate TOTP if available
-            if creds.totp_secret and PYOTP_AVAILABLE:
-                totp = pyotp.TOTP(creds.totp_secret)
-                otp = totp.now()
-                logger.info(f"BrokerLogin: Generated TOTP: {otp}")
-                # mcp_chrome-devtools_fill for OTP field
-            
-            # Step 4: Submit and extract token
-            # mcp_chrome-devtools_click for submit button
-            # Wait for redirect and extract token from URL
-            
-            # For now, return placeholder until MCP integration is complete
-            logger.info("BrokerLogin: Fyers login flow prepared (MCP integration pending)")
-            
-            return LoginResult(
-                success=True,
-                broker=BrokerType.FYERS,
-                access_token="pending_mcp_integration",
-                error=None
-            )
-            
+            async with async_playwright() as p:
+                # Launch browser (headless by default)
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context()
+                page = await context.new_page()
+                
+                logger.info(f"BrokerLogin: Navigating to {self.FYERS_LOGIN_URL}")
+                
+                # Note: Real implementation needs the full OAuth URL with redirect_uri
+                # This is a template for the interaction flow
+                await page.goto(self.FYERS_LOGIN_URL)
+                
+                # Step 1: Client ID
+                # Wait for either mobile input or client ID input
+                # Fyers often changes selectors, robust finding needed
+                client_id_input = page.locator("input[id='fyers_id'], input[name='fyers_id']")
+                await client_id_input.wait_for()
+                await client_id_input.fill(creds.client_id)
+                await page.click("button:has-text('Continue'), button[id='btn_id']")
+                
+                # Step 2: Password
+                password_input = page.locator("input[type='password']")
+                await password_input.wait_for()
+                await password_input.fill(creds.password)
+                await page.click("button:has-text('Continue'), button[id='submit-login']")
+                
+                # Step 3: TOTP/PIN
+                # Wait for OTP input
+                otp_input = page.locator("input[id='first'], input[class*='otp']")
+                await otp_input.wait_for(timeout=10000)
+                
+                if creds.totp_secret and PYOTP_AVAILABLE:
+                    totp = pyotp.TOTP(creds.totp_secret)
+                    otp = totp.now()
+                    logger.info(f"BrokerLogin: Entering TOTP")
+                    
+                    # Fyers often has 6 separate inputs for OTP
+                    # We need to fill them one by one or paste
+                    # Trying to fill the hidden actual input or the first visible one
+                    inputs = await page.locator("input[type='number']").all()
+                    if len(inputs) >= 6:
+                        for i, char in enumerate(otp):
+                            await inputs[i].fill(char)
+                    else:
+                        # Fallback to single input
+                        await otp_input.fill(otp)
+                        
+                    await page.click("button:has-text('Submit'), button[id='btn_id']")
+                
+                # Step 4: Wait for redirect and extract token
+                # The auth code comes in the URL param 'auth_code'
+                async with page.expect_navigation(url_predicate=lambda url: "auth_code=" in url.url, timeout=20000) as response:
+                     pass
+                
+                final_url = page.url
+                logger.info(f"BrokerLogin: Redirected to {final_url}")
+                
+                # Extract auth code from URL
+                from urllib.parse import parse_qs, urlparse
+                parsed = urlparse(final_url)
+                params = parse_qs(parsed.query)
+                auth_code = params.get("auth_code", [None])[0]
+                
+                if not auth_code:
+                    raise ValueError("Auth code not found in redirect URL")
+                
+                await browser.close()
+                
+                return LoginResult(
+                    success=True,
+                    broker=BrokerType.FYERS,
+                    access_token=auth_code,  # This is auth code, needs swapping for token
+                    error=None
+                )
+
         except Exception as e:
             logger.error(f"BrokerLogin: Fyers login failed: {e}")
             return LoginResult(

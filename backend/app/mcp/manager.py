@@ -97,6 +97,8 @@ class MCPManager:
         self._running = False
         self._chrome_connected = False
         self._playwright_available = False
+        self._playwright = None
+        self._browser = None
         
         # Rate limiting
         self._request_timestamps: List[datetime] = []
@@ -115,8 +117,8 @@ class MCPManager:
         # Try to connect to Chrome DevTools
         await self._connect_chrome_devtools()
         
-        # Initialize Playwright availability check
-        await self._check_playwright()
+        # Initialize Playwright
+        await self._init_playwright()
         
         logger.info(f"MCPManager: Started (Chrome: {self._chrome_connected}, Playwright: {self._playwright_available})")
     
@@ -127,6 +129,12 @@ class MCPManager:
         # Stop all modules
         await self.stop_all_modules()
         
+        # Close Playwright
+        if self._browser:
+            await self._browser.close()
+        if self._playwright:
+            await self._playwright.stop()
+            
         self._running = False
         logger.info("MCPManager: Stopped")
     
@@ -135,21 +143,51 @@ class MCPManager:
         try:
             # Check if Chrome is running with debug port
             # This will be implemented when we use the actual MCP tools
-            self._chrome_connected = True
-            logger.info(f"MCPManager: Chrome DevTools available on port {self.config.chrome_debug_port}")
+            # For now, we assume it's available if port is open
+            import asyncio
+            try:
+                reader, writer = await asyncio.open_connection(
+                    self.config.chrome_host, 
+                    self.config.chrome_debug_port
+                )
+                writer.close()
+                await writer.wait_closed()
+                self._chrome_connected = True
+                logger.info(f"MCPManager: Chrome DevTools available on port {self.config.chrome_debug_port}")
+            except (ConnectionRefusedError, OSError):
+                self._chrome_connected = False
+                logger.warning(f"MCPManager: Chrome DevTools not available on port {self.config.chrome_debug_port}")
+                
         except Exception as e:
             self._chrome_connected = False
-            logger.warning(f"MCPManager: Chrome DevTools not available: {e}")
+            logger.warning(f"MCPManager: Chrome DevTools check failed: {e}")
     
-    async def _check_playwright(self) -> None:
-        """Check if Playwright is available."""
+    async def _init_playwright(self) -> None:
+        """Initialize Playwright and launch browser."""
         try:
-            # Playwright availability check
+            from playwright.async_api import async_playwright
+            self._playwright = await async_playwright().start()
+            
+            browser_type = getattr(self._playwright, self.config.playwright_browser)
+            self._browser = await browser_type.launch(
+                headless=self.config.playwright_headless
+            )
+            
             self._playwright_available = True
-            logger.info("MCPManager: Playwright available")
+            logger.info(f"MCPManager: Playwright browser ({self.config.playwright_browser}) launched")
+            
+        except ImportError:
+            self._playwright_available = False
+            logger.error("MCPManager: Playwright not installed. Run: pip install playwright && playwright install")
         except Exception as e:
             self._playwright_available = False
-            logger.warning(f"MCPManager: Playwright not available: {e}")
+            logger.error(f"MCPManager: Playwright initialization failed: {e}")
+
+    async def get_new_context(self) -> Any:
+        """Get a new browser context from the managed browser."""
+        if not self._playwright_available or not self._browser:
+            raise RuntimeError("Playwright is not available")
+        return await self._browser.new_context()
     
     def register_module(self, module: MCPModule) -> None:
         """
