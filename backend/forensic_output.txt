@@ -1,0 +1,47 @@
+====================================================================================================
+FORENSIC ANALYSIS: LAURUSLABS on 2025-12-09
+====================================================================================================
+
+Trade Details:
+  Option: PE 1000.00
+  Entry Time: 2025-12-09 04:00:00+00:00
+  Exit Time: 2025-12-09 06:26:00+00:00
+  Exit Reason: Stop Loss (40%)
+  Entry Premium: Rs 25.15
+  Exit Premium: Rs 14.80
+  P&L: -41.2% (Rs -17,595)
+  Spot at Entry: Rs 994.50
+  Spot at Exit: Rs 994.50
+  Morning Momentum: -0.87%
+
+====================================================================================================
+EQUITY PRICE MOVEMENT (Every 15 minutes):
+====================================================================================================
+  09:15 IST | Open: 1003.20 | High: 1003.80 | Low:  999.50 | Close: 1001.50 | Change:  -0.17%
+  09:30 IST | Open:  996.40 | High:  996.40 | Low:  994.50 | Close:  994.50 | Change:  -0.87%
+Traceback (most recent call last):
+  File "C:\code\KeepGaining\backend\scripts\forensic_analysis.py", line 117, in <module>
+  09:45 IST | Open:  993.50 | High:  993.50 | Low:  992.50 | Close:  992.50 | Change:  -1.07%
+  10:00 IST | Open:  988.50 | High:  988.80 | Low:  987.70 | Close:  988.50 | Change:  -1.47%
+  10:30 IST | Open: 1001.00 | High: 1001.00 | Low:  999.40 | Close:  999.40 | Change:  -0.38%
+  11:30 IST | Open: 1016.60 | High: 1016.60 | Low: 1015.90 | Close: 1015.90 | Change:  +1.27%
+  12:30 IST | Open: 1020.90 | High: 1021.50 | Low: 1020.50 | Close: 1021.40 | Change:  +1.81%
+  13:30 IST | Open: 1022.70 | High: 1022.90 | Low: 1022.20 | Close: 1022.30 | Change:  +1.90%
+  14:30 IST | Open: 1025.80 | High: 1026.00 | Low: 1025.00 | Close: 1025.10 | Change:  +2.18%
+  15:00 IST | Open: 1020.00 | High: 1022.50 | Low: 1020.00 | Close: 1022.30 | Change:  +1.90%
+    asyncio.run(analyze_trade())
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\code\KeepGaining\backend\scripts\forensic_analysis.py", line 78, in analyze_trade
+    print(f"\n  \U0001f4ca Morning Momentum (9:15 to 9:30): {morning_momentum:+.2f}%")
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f4ca' in position 4: character maps to <undefined>

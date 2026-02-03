@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "keepgaining-backend"
+version = "0.1.0"
+description = "Backend for KeepGaining Trading Platform"
+authors = ["Antigravity <antigravity@deepmind.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.109.0"
+uvicorn = {extras = ["standard"], version = "^0.27.0"}
+sqlalchemy = "^2.0.25"
+asyncpg = "^0.29.0"
+pydantic = {extras = ["email"], version = "^2.6.0"}
+pydantic-settings = "^2.1.0"
+pandas = "^2.2.0"
+numpy = "^1.26.0"
+fyers-apiv3 = "^3.0.0"
+playwright = "^1.40.0"
+tenacity = "^8.2.0"
+python-dotenv = "^1.0.1"
+httpx = "^0.26.0"
+loguru = "^0.7.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+black = "^24.1.0"
+isort = "^5.13.0"
+mypy = "^1.8.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

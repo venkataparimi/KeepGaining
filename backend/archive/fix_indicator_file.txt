@@ -1,0 +1,113 @@
+"""
+Service for computing and storing indicators in database
+"""
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import List, Optional
+from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.models.candle_data import CandleData
+from loguru import logger
+
+
+class IndicatorComputationService:
+    """Pre-compute and store all indicators for faster backtesting"""
+    
+    def __init__(self, db_session: AsyncSession):
+        self.db = db_session
+    
+    @staticmethod
+    def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute all standard indicators for a DataFrame of candles
+        
+        Args:
+            df: DataFrame with columns: open, high, low, close, volume
+            
+        Returns:
+            DataFrame with all indicators added
+        """
+        if len(df) < 200:
+            logger.warning(f"Only {len(df)} candles - some indicators need 200+")
+        
+        # Moving Averages
+        df['sma_9'] = df['close'].rolling(window=9).mean()
+        df['sma_20'] = df['close'].rolling(window=20).mean()
+        df['sma_50'] = df['close'].rolling(window=50).mean()
+        df['sma_200'] = df['close'].rolling(window=200).mean()
+        
+        df['ema_9'] = df['close'].ewm(span=9, adjust=False).mean()
+        df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
+        df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
+        df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
+        
+        # RSI
+        df['rsi_14'] = IndicatorComputationService._compute_rsi(df['close'], 14)
+        df['rsi_9'] = IndicatorComputationService._compute_rsi(df['close'], 9)
+        
+        # MACD
+        macd_data = IndicatorComputationService._compute_macd(df['close'])
+        df['macd'] = macd_data['macd']
+        df['macd_signal'] = macd_data['signal']
+        df['macd_histogram'] = macd_data['histogram']
+        
+        # Stochastic
+        stoch = IndicatorComputationService._compute_stochastic(
+            df['high'], df['low'], df['close']
+        )
+        df['stoch_k'] = stoch['k']
+        df['stoch_d'] = stoch['d']
+        
+        # Bollinger Bands
+        bb = IndicatorComputationService._compute_bollinger_bands(df['close'])
+        df['bb_upper'] = bb['upper']
+        df['bb_middle'] = bb['middle']
+        df['bb_lower'] = bb['lower']
+        
+        # ATR
+        df['atr_14'] = IndicatorComputationService._compute_atr(
+            df['high'], df['low'], df['close'], 14
+        )
+        
+        # SuperTrend
+        supertrend = IndicatorComputationService._compute_supertrend(
+            df['high'], df['low'], df['close']
+        )
+        df['supertrend'] = supertrend['supertrend']
+        df['supertrend_direction'] = supertrend['direction']
+        
+        # ADX
+        df['adx'] = IndicatorComputationService._compute_adx(
+            df['high'], df['low'], df['close']
+        )
+        
+        # VWAP (resets daily)
+        df['vwap'] = IndicatorComputationService._compute_vwap(
+            df['high'], df['low'], df['close'], df['volume'], df['timestamp']
+        )
+        
+        # VWMA (Volume Weighted Moving Average) - Multiple periods
+        df['vwma_20'] = IndicatorComputationService._compute_vwma(
+            df['close'], df['volume'], 20
+        )
+        df['vwma_22'] = IndicatorComputationService._compute_vwma(
+            df['close'], df['volume'], 22
+        )
+        df['vwma_31'] = IndicatorComputationService._compute_vwma(
+            df['close'], df['volume'], 31
+        )
+        df['vwma_50'] = IndicatorComputationService._compute_vwma(
+            df['close'], df['volume'], 50
+        )
+        
+        # OBV
+        df['obv'] = IndicatorComputationService._compute_obv(
+            df['close'], df['volume']
+        )
+        
+        # Pivot Points - All three types
+        pivots = IndicatorComputationService._compute_all_pivots(df)
+        df = pd.concat([df, pivots], axis=1)
+        
+        return df

@@ -1,0 +1,74 @@
+Generate a detailed trade plan for {symbol}:
+
+## Strategy Context
+- Strategy Name: {strategy_name}
+- Signal Generated: {signal_time}
+- Signal Type: {signal_type}
+
+## Entry Analysis
+- Proposed Entry: {entry_price}
+- Current Price: {current_price}
+- Entry Confidence: {entry_confidence}/10
+
+## Technical Setup
+{technical_setup}
+
+## Risk Parameters
+- Max Risk per Trade: {max_risk_percent}%
+- Account Size: {account_size}
+- Max Position Size: {max_position_size}
+
+## Market Conditions
+{market_conditions}
+
+Please create a comprehensive trade plan:
+
+1. **Entry Strategy**
+   - Optimal entry price/range
+   - Entry triggers/conditions
+   - Partial entry approach (if applicable)
+   - Entry timing recommendations
+
+2. **Position Sizing**
+   - Recommended quantity
+   - Capital allocation
+   - Risk per unit calculation
+   - Scaling in approach (if any)
+
+3. **Stop Loss Strategy**
+   - Initial stop loss level
+   - Stop loss justification (technical/volatility-based)
+   - Trailing stop strategy
+   - Stop adjustment rules
+
+4. **Target Strategy**
+   - Primary target level(s)
+   - Profit-taking approach
+   - Partial exit levels
+   - Trailing profit strategy
+
+5. **Risk-Reward Analysis**
+   - Risk-reward ratio
+   - Expected value calculation
+   - Breakeven analysis
+   - Maximum adverse excursion estimate
+
+6. **Monitoring Plan**
+   - Key price levels to watch
+   - Indicators to monitor
+   - Time-based rules
+   - Exit signals/conditions
+
+7. **Contingency Plans**
+   - If price gaps against position
+   - If volatility spikes
+   - If correlation breaks
+   - Emergency exit conditions
+
+8. **Trade Management Rules**
+   - When to hold
+   - When to scale out
+   - When to cut losses early
+   - When to let profits run
+
+Provide a complete, actionable trade plan suitable for automated execution.

@@ -1,0 +1,51 @@
+{
+  "last_updated": "2026-02-03T21:15:05.428048",
+  "sync_config": {
+    "stale_threshold_hours": 20,
+    "default_sync_days": 7
+  },
+  "segments": {
+    "equity": {
+      "description": "F&O eligible equity stocks",
+      "last_sync": "2026-02-03T19:53:32",
+      "last_sync_date": "2026-02-03",
+      "instruments_count": 194,
+      "status": "complete"
+    },
+    "indices_nse": {
+      "description": "NSE indices (NIFTY, BANKNIFTY, etc.)",
+      "last_sync": "2026-02-03T19:53:34",
+      "last_sync_date": "2026-02-03",
+      "instruments_count": 14,
+      "status": "complete"
+    },
+    "indices_bse": {
+      "description": "BSE indices (SENSEX, BANKEX)",
+      "last_sync": "2026-02-03T21:15:05.428048",
+      "last_sync_date": "2026-02-03",
+      "status": "complete",
+      "instruments_count": 2
+    },
+    "fo_current": {
+      "description": "Current expiry F&O (futures + options)",
+      "last_sync": "2026-02-03T20:10:00",
+      "last_sync_date": "2026-02-03",
+      "instruments_count": 1153,
+      "status": "complete"
+    },
+    "fo_historical": {
+      "description": "Historical F&O data (expired contracts)",
+      "last_sync": "2026-02-03T21:09:18.726273",
+      "last_sync_date": "2026-02-03",
+      "instruments_count": 1491,
+      "status": "complete",
+      "error": null
+    },
+    "indicators": {
+      "last_sync": "2026-02-03T21:05:38.681095",
+      "last_sync_date": "2026-02-03",
+      "status": "complete",
+      "instruments_count": 54252
+    }
+  }
+}

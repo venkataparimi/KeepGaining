@@ -1,0 +1,52 @@
+Assess the risk profile for the following trading position:
+
+## Position Details
+- Symbol: {symbol}
+- Position Type: {position_type} (LONG/SHORT)
+- Entry Price: {entry_price}
+- Current Price: {current_price}
+- Position Size: {position_size}
+- Unrealized P&L: {unrealized_pnl}
+
+## Portfolio Context
+- Total Capital: {total_capital}
+- Position as % of Portfolio: {position_percentage}%
+- Current Drawdown: {current_drawdown}%
+- Open Positions: {open_positions_count}
+
+## Market Conditions
+{market_conditions}
+
+## Technical Indicators
+{technical_indicators}
+
+Please provide a detailed risk assessment:
+
+1. **Current Risk Level** (Low/Medium/High/Critical)
+   - Position risk score (1-10)
+   - Portfolio exposure analysis
+   - Correlation risks
+
+2. **Risk Factors**
+   - Market volatility impact
+   - Liquidity concerns
+   - Event risks (earnings, news, etc.)
+   - Technical breakdown risks
+
+3. **Risk Mitigation Recommendations**
+   - Adjust stop loss levels
+   - Position size modifications
+   - Hedging strategies
+   - Portfolio rebalancing needs
+
+4. **Warning Signals**
+   - Critical price levels being approached
+   - Deteriorating technical conditions
+   - Increased volatility warnings
+
+5. **Action Items**
+   - Immediate actions required (if any)
+   - Monitoring priorities
+   - Risk limit adjustments
+
+Focus on actionable risk management recommendations.

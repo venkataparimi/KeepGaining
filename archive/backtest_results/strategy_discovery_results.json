@@ -1,0 +1,25 @@
+{
+  "summary": {
+    "total_trades": 2,
+    "stocks": [
+      "HEROMOTOCO",
+      "HINDZINC"
+    ],
+    "dates": [
+      "2025-12-01"
+    ],
+    "entry_times": [
+      "14:00:00"
+    ],
+    "option_types": [
+      "CE"
+    ],
+    "common_features": {
+      "entry_hour": 14,
+      "option_type": "CE",
+      "moneyness": "ITM"
+    }
+  },
+  "patterns": "After analyzing the two successful option trades, I've identified a few common patterns and strategies:\n\n**Pattern 1: Morning Range Breakout**\n\n* Entry time: 14:00:00 (near the end of the morning range)\n* Price features:\n\t+ Position in Morning Range: above 50% ( Trade 1: 51.2%, Trade 2: 54.9%)\n\t+ Morning Range: relatively narrow (Trade 1: 3.46%, Trade 2: 2.45%)\n* Technical indicators:\n\t+ RSI(14) near oversold/oversold territory (Trade 1: 46.08, Trade 2: 51.38)\n\t+ MACD crossing below zero line or near signal line (Trade 1: -0.43, Trade 2: 0.22)\n\nEntry rules for this pattern:\n\n1. Identify a morning range with relatively narrow price movement.\n2. Look for the price to break out of the top of the morning range at around 14:00:00.\n3. Check if RSI(14) is near oversold/oversold territory and MACD is crossing below zero line or near signal line.\n\n**Pattern 2: In-the-Money Call Options**\n\n* Strike:\n\t+ Moneyness: ITM (in-the-money)\n\t+ Distance: relatively small (Trade 1: 0.72%, Trade 2: 1.91%)\n* Entry premium: relatively low to moderate (\u20b914.0 in Trade 1, \u20b9195.0 in Trade 2)\n\nEntry rules for this pattern:\n\n1. Identify an ITM call option with a relatively small distance from the spot price.\n2. Look for entry premiums that are relatively low to moderate.\n\n**Additional Insights**\n\n* Both trades have similar entry times (14:00:00) and prices near the top of the morning range.\n* Technical indicators, such as RSI(14) and MACD, show some similarities in their values and positioning.\n\nConfidence level for these patterns:\n\nMedium-high confidence, as there are two trades with similar characteristics. However, more data points would be needed to increase the confidence level.\n\nWhich trades belong to each pattern?\n\n* Trade 1: Morning Range Breakout ( Pattern 1)\n* Trade 2: In-the-Money Call Options (Pattern 2)\n\nRules that could replicate these trades:\n\n1. Use a combination of price and technical indicators to identify morning range breakouts.\n2. Look for ITM call options with relatively small distances from the spot price.\n3. Consider setting stop-losses or adjusting risk parameters based on market conditions.\n\nPlease note that this analysis is not exhaustive, and more data points or additional insights may be needed to refine these patterns and rules.",
+  "rules": "Here are the formal trading rules based on the observed patterns:\n\n**Pattern 1: Morning Range Breakout**\n\nEntry Rules:\n\n1. Time condition: The entry time is between 13:30:00 and 14:15:00 (15-minute window).\n2. Price condition: The price must be above 50% of the morning range.\n3. Technical indicators:\n\t* RSI(14) must be below 55 (oversold territory).\n\t* MACD must cross below zero line or be near the signal line.\n4. Volume condition: Average volume over the past hour must be at least 1.5 times the average daily volume.\n\n**Pattern 2: In-the-Money Call Options**\n\nStrike Selection:\n\n1. ATM/OTM preference: Prefer ITM call options with a strike price within 2% of the spot price.\n2. Strike selection: Select the strike price that is closest to the spot price while still being ITM.\n\nExit Rules:\n\n1. Target %: Exit the trade when the option reaches 110% of the entry premium.\n2. Stop Loss %: Set a stop-loss order at 90% of the entry premium to limit potential losses.\n3. Time exit: Allow the trade to run for a maximum of 4 hours from the entry time.\n\nFilters:\n\n1. Stock universe: Only consider call options on stocks listed in the Nifty 50 index.\n2. Days to avoid: Avoid entering trades on Mondays and Tuesdays, as these are typically low-volume days.\n\nAdditional Rules:\n\n* Risk management: Set a maximum risk per trade at \u20b910,000 (or 1% of the total portfolio).\n* Position sizing: Limit the position size to 2% of the total portfolio.\n* Trade duration: Allow trades to run for a maximum of 3 days from the entry time.\n\nNote that these rules are based on the observed patterns and may need to be refined or adjusted as more data becomes available. Additionally, it's essential to backtest these rules using historical data to evaluate their performance before implementing them in live markets."
+}

@@ -1,0 +1,23 @@
+{
+  "name": "ATM Breakout Momentum",
+  "type": "Directional - Bullish",
+  "confidence": "High",
+  "details": [
+    "Entered at ATM (Strike: \u20b9140, Spot: \u20b9140.00)",
+    "Early momentum: +4.63% in first 15 mins",
+    "Intraday range: 5.60%",
+    "Maximum gamma exposure at ATM"
+  ],
+  "signals": [
+    "Price at or near strike",
+    "Early momentum (+4.63%)",
+    "High volatility day (5.60%)"
+  ],
+  "risk_reward": {
+    "Entry Premium": "\u20b99",
+    "Break-even": "\u20b9149.00",
+    "Max Loss": "\u20b99 (100%)",
+    "Day High": "\u20b9147.75",
+    "Potential Profit": "\u20b90.00"
+  }
+}

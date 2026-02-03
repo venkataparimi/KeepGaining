@@ -1,0 +1,23 @@
+{
+  "total_trades": 28,
+  "ce_trades": 20,
+  "pe_trades": 8,
+  "patterns": {
+    "ce_avg_rsi": 48.415317739070474,
+    "ce_avg_range": 53.852917391237405,
+    "pe_avg_rsi": 51.08423439089933,
+    "pe_avg_range": 27.25357178625539,
+    "itm_preference": 71.42857142857143,
+    "neutral_rsi_pct": 96.42857142857143
+  },
+  "strategies": [
+    "Strategy A: Bullish Range Entry (CE) at 14:00, RSI 38-55, Range >50%",
+    "Strategy B: Bearish Low Entry (PE) at 14:00, RSI 49-57, Range <45%",
+    "Strategy C: HINDZINC CE specialty trade"
+  ],
+  "repeated_stocks": {
+    "HINDZINC": 5,
+    "IDEA": 2,
+    "VEDL": 2
+  }
+}

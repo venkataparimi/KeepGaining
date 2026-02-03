@@ -1,0 +1,283 @@
+[
+  {
+    "cluster": "1",
+    "analysis": {
+      "trade_count": 7,
+      "ce_trades": 7,
+      "pe_trades": 0,
+      "dominant_type": "CE",
+      "avg_morning_change": 2.043951784591624,
+      "avg_morning_range_position": 66.62320424615868,
+      "avg_rsi": 45.579822973917494,
+      "avg_williams_r": -93.13340891912313,
+      "avg_stochastic": 6.866591080876868,
+      "avg_volume_ratio": 2.274955130286372,
+      "avg_vs_vwap": 0.5041364090962287,
+      "stocks": [
+        "PETRONET",
+        "HEROMOTOCO",
+        "HINDZINC",
+        "VEDL",
+        "SUPREMEIND",
+        "CANBK",
+        "IEX"
+      ],
+      "dates": [
+        "2025-12-15",
+        "2025-12-01",
+        "2025-12-04",
+        "2025-12-16",
+        "2025-12-02"
+      ]
+    },
+    "rules": {
+      "strategy_id": "STRATEGY_2",
+      "trade_type": "CE",
+      "conditions": {
+        "rsi": "36 - 56",
+        "williams_r": "< -75 (extreme oversold)",
+        "volume": "> 2x average (high volume)"
+      },
+      "description": "Buy CALL option when\n  - RSI: 36 - 56\n  - WILLIAMS_R: < -75 (extreme oversold)\n  - VOLUME: > 2x average (high volume)"
+    },
+    "trades": [
+      {
+        "stock": "IEX",
+        "date": "2025-12-01",
+        "type": "CE"
+      },
+      {
+        "stock": "HINDZINC",
+        "date": "2025-12-01",
+        "type": "CE"
+      },
+      {
+        "stock": "HEROMOTOCO",
+        "date": "2025-12-01",
+        "type": "CE"
+      },
+      {
+        "stock": "CANBK",
+        "date": "2025-12-02",
+        "type": "CE"
+      },
+      {
+        "stock": "PETRONET",
+        "date": "2025-12-04",
+        "type": "CE"
+      },
+      {
+        "stock": "VEDL",
+        "date": "2025-12-15",
+        "type": "CE"
+      },
+      {
+        "stock": "SUPREMEIND",
+        "date": "2025-12-16",
+        "type": "CE"
+      }
+    ]
+  },
+  {
+    "cluster": "0",
+    "analysis": {
+      "trade_count": 12,
+      "ce_trades": 8,
+      "pe_trades": 4,
+      "dominant_type": "CE",
+      "avg_morning_change": 0.7440248082130051,
+      "avg_morning_range_position": 58.351055005919015,
+      "avg_rsi": 53.32503398757299,
+      "avg_williams_r": -31.03221076270675,
+      "avg_stochastic": 68.96778923729325,
+      "avg_volume_ratio": 0.19333707217118745,
+      "avg_vs_vwap": 0.6113592093528617,
+      "stocks": [
+        "SHRIRAMFIN",
+        "ASIANPAINT",
+        "IDEA",
+        "MAXHEALTH",
+        "ANGELONE",
+        "RBLBANK",
+        "TVSMOTOR",
+        "HINDZINC",
+        "PAYTM",
+        "POWERINDIA"
+      ],
+      "dates": [
+        "2025-12-15",
+        "2025-12-01",
+        "2025-12-17",
+        "2025-12-03",
+        "2025-12-11",
+        "2025-12-16",
+        "2025-12-12",
+        "2025-12-02",
+        "2025-12-05"
+      ]
+    },
+    "rules": {
+      "strategy_id": "STRATEGY_1",
+      "trade_type": "CE",
+      "conditions": {
+        "rsi": "43 - 63"
+      },
+      "description": "Buy CALL option when\n  - RSI: 43 - 63"
+    },
+    "trades": [
+      {
+        "stock": "TVSMOTOR",
+        "date": "2025-12-01",
+        "type": "CE"
+      },
+      {
+        "stock": "PAYTM",
+        "date": "2025-12-02",
+        "type": "CE"
+      },
+      {
+        "stock": "ASIANPAINT",
+        "date": "2025-12-02",
+        "type": "CE"
+      },
+      {
+        "stock": "ANGELONE",
+        "date": "2025-12-03",
+        "type": "PE"
+      },
+      {
+        "stock": "POWERINDIA",
+        "date": "2025-12-05",
+        "type": "PE"
+      },
+      {
+        "stock": "SHRIRAMFIN",
+        "date": "2025-12-05",
+        "type": "CE"
+      },
+      {
+        "stock": "HINDZINC",
+        "date": "2025-12-11",
+        "type": "CE"
+      },
+      {
+        "stock": "IDEA",
+        "date": "2025-12-11",
+        "type": "CE"
+      },
+      {
+        "stock": "HINDZINC",
+        "date": "2025-12-12",
+        "type": "CE"
+      },
+      {
+        "stock": "HINDZINC",
+        "date": "2025-12-15",
+        "type": "CE"
+      },
+      {
+        "stock": "RBLBANK",
+        "date": "2025-12-16",
+        "type": "PE"
+      },
+      {
+        "stock": "MAXHEALTH",
+        "date": "2025-12-17",
+        "type": "PE"
+      }
+    ]
+  },
+  {
+    "cluster": "2",
+    "analysis": {
+      "trade_count": 9,
+      "ce_trades": 5,
+      "pe_trades": 4,
+      "dominant_type": "CE",
+      "avg_morning_change": -1.9648513859312773,
+      "avg_morning_range_position": 9.357384432367805,
+      "avg_rsi": 45.52345985727222,
+      "avg_williams_r": -92.08551566977543,
+      "avg_stochastic": 7.914484330224561,
+      "avg_volume_ratio": 2.4865871966452104,
+      "avg_vs_vwap": -1.1076111624102776,
+      "stocks": [
+        "INDIGO",
+        "KAYNES",
+        "DELHIVERY",
+        "GMRAIRPORT",
+        "OBEROIRLTY",
+        "HINDZINC",
+        "VEDL",
+        "IDEA",
+        "AXISBANK"
+      ],
+      "dates": [
+        "2025-12-17",
+        "2025-12-04",
+        "2025-12-03",
+        "2025-12-16",
+        "2025-12-02",
+        "2025-12-05"
+      ]
+    },
+    "rules": {
+      "strategy_id": "STRATEGY_3",
+      "trade_type": "CE",
+      "conditions": {
+        "rsi": "36 - 56",
+        "williams_r": "< -75 (extreme oversold)",
+        "morning_range_position": "< 35% (near morning low - reversal)",
+        "volume": "> 2x average (high volume)"
+      },
+      "description": "Buy CALL option when\n  - RSI: 36 - 56\n  - WILLIAMS_R: < -75 (extreme oversold)\n  - MORNING_RANGE_POSITION: < 35% (near morning low - reversal)\n  - VOLUME: > 2x average (high volume)"
+    },
+    "trades": [
+      {
+        "stock": "IDEA",
+        "date": "2025-12-02",
+        "type": "CE"
+      },
+      {
+        "stock": "GMRAIRPORT",
+        "date": "2025-12-02",
+        "type": "CE"
+      },
+      {
+        "stock": "DELHIVERY",
+        "date": "2025-12-03",
+        "type": "PE"
+      },
+      {
+        "stock": "KAYNES",
+        "date": "2025-12-04",
+        "type": "PE"
+      },
+      {
+        "stock": "INDIGO",
+        "date": "2025-12-04",
+        "type": "PE"
+      },
+      {
+        "stock": "OBEROIRLTY",
+        "date": "2025-12-05",
+        "type": "CE"
+      },
+      {
+        "stock": "AXISBANK",
+        "date": "2025-12-16",
+        "type": "PE"
+      },
+      {
+        "stock": "HINDZINC",
+        "date": "2025-12-17",
+        "type": "CE"
+      },
+      {
+        "stock": "VEDL",
+        "date": "2025-12-17",
+        "type": "CE"
+      }
+    ]
+  }
+]

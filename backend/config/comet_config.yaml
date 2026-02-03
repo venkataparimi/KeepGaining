@@ -1,0 +1,157 @@
+# Comet AI Configuration
+
+# Provider Settings
+comet:
+  provider: "perplexity"  # AI provider
+  model: "sonar-pro"      # Model to use (sonar-pro for Perplexity)
+  temperature: 0.7        # Creativity level (0.0 = focused, 1.0 = creative)
+  max_tokens: 2000        # Maximum response length
+  timeout: 30             # Request timeout in seconds
+
+# Prompt Template Configuration
+prompts:
+  # Default templates to use
+  signal_analysis: "signal_analysis"
+  risk_assessment: "risk_assessment"
+  market_context: "market_context"
+  trade_plan: "trade_plan"
+  
+  # Template directory (relative to backend/)
+  templates_dir: "prompts/templates"
+
+# Response Caching
+cache:
+  enabled: true           # Enable response caching
+  ttl: 3600              # Cache time-to-live in seconds (1 hour)
+  max_size: 100          # Maximum cached responses
+  
+  # Cache similar queries (fuzzy matching)
+  fuzzy_match: true
+  similarity_threshold: 0.9
+
+# Rate Limiting
+rate_limit:
+  enabled: true
+  max_requests_per_minute: 30
+  max_requests_per_hour: 500
+  
+  # Backoff strategy when rate limited
+  backoff_strategy: "exponential"  # exponential, linear, constant
+  initial_backoff: 2               # seconds
+  max_backoff: 60                  # seconds
+
+# Retry Configuration
+retry:
+  enabled: true
+  max_attempts: 3
+  retry_on_timeout: true
+  retry_on_rate_limit: true
+
+# Logging
+logging:
+  log_requests: true      # Log all API requests
+  log_responses: false    # Log full responses (verbose)
+  log_errors: true        # Log errors and failures
+  
+  # Performance monitoring
+  track_latency: true
+  track_token_usage: true
+
+# Response Processing
+processing:
+  # Auto-extract structured data from responses
+  auto_extract_scores: true     # Extract numeric ratings
+  auto_extract_actions: true    # Extract action items
+  auto_extract_levels: true     # Extract price levels
+  
+  # Response validation
+  validate_responses: true
+  min_response_length: 50       # Minimum acceptable response length
+
+# Fallback Behavior
+fallback:
+  enabled: true
+  
+  # If Comet fails, use these strategies
+  strategies:
+    - "use_cached"           # Try cached similar query
+    - "use_default_rules"    # Use hardcoded trading rules
+    - "skip_analysis"        # Skip Comet analysis, proceed with signal
+  
+  # Notify on fallback
+  notify_on_fallback: true
+
+# Cost Management
+cost_management:
+  # Track API costs
+  track_costs: true
+  
+  # Cost limits
+  daily_limit_usd: 10.0
+  monthly_limit_usd: 200.0
+  
+  # Actions when limit reached
+  on_limit_reached: "fallback"  # fallback, stop, notify
+
+# Feature Flags
+features:
+  signal_validation: true       # Validate signals before trading
+  risk_assessment: true         # Assess risk for positions
+  market_context: true          # Get market context
+  trade_plan_generation: true   # Generate trade plans
+  portfolio_analysis: false     # Portfolio-level analysis (future)
+  sentiment_analysis: false     # News/sentiment analysis (future)
+
+# Integration Settings
+integration:
+  # Async processing
+  async_enabled: true
+  max_concurrent_requests: 5
+  
+  # Background jobs
+  background_validation: false  # Validate signals in background
+  batch_processing: false       # Batch multiple signals
+
+# Development/Testing
+development:
+  # Use mock responses for testing
+  mock_mode: false
+  
+  # Save all requests/responses for debugging
+  save_request_logs: true
+  logs_directory: "logs/comet"
+  
+  # Prompt testing
+  test_prompts_on_startup: false
+
+# Production Settings
+production:
+  # Stricter settings for production
+  strict_validation: true
+  fail_fast: false              # Continue on errors vs fail immediately
+  
+  # Monitoring
+  enable_metrics: true
+  metrics_port: 9090
+  
+  # Health checks
+  health_check_enabled: true
+  health_check_interval: 300    # seconds
+
+# Template-Specific Settings
+template_settings:
+  signal_analysis:
+    max_tokens: 1500
+    temperature: 0.5            # More focused for trading decisions
+    
+  risk_assessment:
+    max_tokens: 1200
+    temperature: 0.3            # Very focused for risk
+    
+  market_context:
+    max_tokens: 2000
+    temperature: 0.7            # More creative for market narrative
+    
+  trade_plan:
+    max_tokens: 2500
+    temperature: 0.4            # Detailed but focused

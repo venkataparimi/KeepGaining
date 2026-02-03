@@ -1,0 +1,7 @@
+{
+  "strategy": "Cluster 1 (Fast Parquet)",
+  "period": "2025-10-01 to 2025-10-31",
+  "trades": 22,
+  "win_rate": 40.909090909090914,
+  "total_pnl": -1289.7974397097473
+}

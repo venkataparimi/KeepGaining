@@ -1,0 +1,135 @@
+# KeepGaining Trading Platform - .gitignore
+
+# =============================================================================
+# SENSITIVE FILES - NEVER COMMIT!
+# =============================================================================
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# Broker tokens and credentials
+backend/data/upstox_token.json
+backend/data/fyers_token.json
+backend/data/.refresh_token
+**/upstox_token.json
+**/fyers_token.json
+**/.refresh_token
+
+# =============================================================================
+# LARGE DATA FILES - Regeneratable from database
+# =============================================================================
+
+# Parquet data files (loaded from DB)
+backend/scripts/data/loaded/
+backend/data/strategy_dataset/
+
+# Computed indicator files (pkl/parquet)
+backend/scripts/data/computed/
+*.pkl
+
+# Raw parquet files (if any)
+backend/scripts/data/**/*.parquet
+backend/data/**/*.parquet
+
+# =============================================================================
+# PYTHON
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+.env/
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# =============================================================================
+# FRONTEND (Next.js)
+# =============================================================================
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.pnp/
+frontend/.pnp.js
+
+# =============================================================================
+# IDE & EDITORS
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# =============================================================================
+# OS FILES
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# LOGS & TEMP
+# =============================================================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# =============================================================================
+# MISC
+# =============================================================================
+# Redis dump
+dump.rdb
+
+# Local development databases
+*.db
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup

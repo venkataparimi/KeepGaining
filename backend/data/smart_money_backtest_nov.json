@@ -1,0 +1,104 @@
+{
+  "total_trades": 7,
+  "winners": 4,
+  "losers": 3,
+  "win_rate": 57.14,
+  "profit_factor": 1.41,
+  "total_pnl": 50.84,
+  "avg_pnl": 7.26,
+  "avg_winner": 43.43,
+  "avg_loser": 40.96,
+  "sharpe_ratio": 2.21,
+  "max_drawdown": 44.28,
+  "exit_reasons": {
+    "BIG_RED_CANDLE": 3,
+    "TRAILING_SL": 2,
+    "TIME_EXIT": 2
+  },
+  "symbol_stats": {
+    "('pnl', 'count')": {
+      "TCS": 7
+    },
+    "('pnl', 'sum')": {
+      "TCS": 50.84
+    },
+    "('pnl', 'mean')": {
+      "TCS": 7.26
+    },
+    "('pnl_pct', 'mean')": {
+      "TCS": 0.04
+    }
+  },
+  "trades": [
+    {
+      "symbol": "TCS",
+      "entry_time": "2024-11-06 04:48:00+00:00",
+      "exit_time": "2024-11-06 05:00:00+00:00",
+      "entry_price": 4091.25,
+      "exit_price": 4075.5,
+      "pnl": -63.0,
+      "pnl_pct": -0.384967919340055,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "TCS",
+      "entry_time": "2024-11-06 05:07:00+00:00",
+      "exit_time": "2024-11-06 05:53:00+00:00",
+      "entry_price": 4076.8,
+      "exit_price": 4093.18125,
+      "pnl": 65.52499999999964,
+      "pnl_pct": 0.40181637558869476,
+      "exit_reason": "TRAILING_SL"
+    },
+    {
+      "symbol": "TCS",
+      "entry_time": "2024-11-06 05:54:00+00:00",
+      "exit_time": "2024-11-06 06:30:00+00:00",
+      "entry_price": 4096.7,
+      "exit_price": 4114.95,
+      "pnl": 73.0,
+      "pnl_pct": 0.4454805087021261,
+      "exit_reason": "TIME_EXIT"
+    },
+    {
+      "symbol": "TCS",
+      "entry_time": "2024-11-22 04:46:00+00:00",
+      "exit_time": "2024-11-22 04:52:00+00:00",
+      "entry_price": 4137.05,
+      "exit_price": 4133.15,
+      "pnl": -15.600000000002183,
+      "pnl_pct": -0.09427007166943947,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "TCS",
+      "entry_time": "2024-11-22 04:58:00+00:00",
+      "exit_time": "2024-11-22 05:13:00+00:00",
+      "entry_price": 4136.25,
+      "exit_price": 4145.0,
+      "pnl": 35.0,
+      "pnl_pct": 0.2115442731943185,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "TCS",
+      "entry_time": "2024-11-22 05:20:00+00:00",
+      "exit_time": "2024-11-22 05:55:00+00:00",
+      "entry_price": 4144.3,
+      "exit_price": 4133.23,
+      "pnl": -44.280000000002474,
+      "pnl_pct": -0.2671138672393557,
+      "exit_reason": "TRAILING_SL"
+    },
+    {
+      "symbol": "TCS",
+      "entry_time": "2024-11-22 05:58:00+00:00",
+      "exit_time": "2024-11-22 06:30:00+00:00",
+      "entry_price": 4139.0,
+      "exit_price": 4139.05,
+      "pnl": 0.2000000000007276,
+      "pnl_pct": 0.0012080212611785914,
+      "exit_reason": "TIME_EXIT"
+    }
+  ]
+}

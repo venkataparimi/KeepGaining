@@ -1,0 +1,56 @@
+Analyze the current market context for trading {symbol}:
+
+## Market Data
+- Current Price: {current_price}
+- Day High: {day_high}
+- Day Low: {day_low}
+- Volume: {volume} (vs Avg: {avg_volume})
+- Volatility (ATR): {atr}
+
+## Index/Sector Performance
+{index_performance}
+
+## Recent News/Events
+{recent_events}
+
+## Technical Context
+{technical_context}
+
+## Time Context
+- Current Time: {current_time}
+- Market Session: {market_session}
+- Day of Week: {day_of_week}
+
+Please provide comprehensive market context analysis:
+
+1. **Overall Market Sentiment**
+   - Bullish/Bearish/Neutral assessment
+   - Market breadth analysis
+   - Sector rotation patterns
+
+2. **Symbol-Specific Context**
+   - Relative strength vs market/sector
+   - Recent price action patterns
+   - Volume and liquidity analysis
+
+3. **Timing Considerations**
+   - Optimal trading times for this symbol
+   - Session-specific characteristics
+   - Upcoming events/catalysts
+
+4. **Correlation Analysis**
+   - Key correlations with indices/sectors
+   - Impact of broader market moves
+   - Inter-market relationships
+
+5. **Trading Environment Assessment**
+   - Market regime (trending/ranging/volatile)
+   - Liquidity conditions
+   - Risk-on vs Risk-off sentiment
+
+6. **Opportunities and Cautions**
+   - Favorable conditions for trading
+   - Warning signs to watch
+   - Recommended trading approach
+
+Provide context that helps optimize entry/exit timing and strategy selection.

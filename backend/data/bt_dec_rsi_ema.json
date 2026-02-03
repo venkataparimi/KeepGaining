@@ -1,0 +1,194 @@
+{
+  "total_trades": 12,
+  "winners": 7,
+  "losers": 5,
+  "win_rate": 58.33,
+  "profit_factor": 0.79,
+  "total_pnl": -55.73,
+  "avg_pnl": -4.64,
+  "avg_winner": 30.49,
+  "avg_loser": 53.84,
+  "sharpe_ratio": -1.22,
+  "max_drawdown": 202.65,
+  "exit_reasons": {
+    "BIG_RED_CANDLE": 8,
+    "TRAILING_SL": 3,
+    "TIME_EXIT": 1
+  },
+  "symbol_stats": {
+    "('pnl', 'count')": {
+      "BANKBARODA": 1,
+      "CANBK": 1,
+      "CUMMINSIND": 1,
+      "IGL": 2,
+      "MOTHERSON": 1,
+      "NATCOPHARM": 1,
+      "PNB": 1,
+      "SBICARD": 1,
+      "SJVN": 1,
+      "SOBHA": 1,
+      "TITAN": 1
+    },
+    "('pnl', 'sum')": {
+      "BANKBARODA": 24.18,
+      "CANBK": 30.08,
+      "CUMMINSIND": 79.5,
+      "IGL": -33.01,
+      "MOTHERSON": 24.22,
+      "NATCOPHARM": -79.3,
+      "PNB": 42.32,
+      "SBICARD": -46.2,
+      "SJVN": -97.89,
+      "SOBHA": -10.45,
+      "TITAN": 10.83
+    },
+    "('pnl', 'mean')": {
+      "BANKBARODA": 24.18,
+      "CANBK": 30.08,
+      "CUMMINSIND": 79.5,
+      "IGL": -16.51,
+      "MOTHERSON": 24.22,
+      "NATCOPHARM": -79.3,
+      "PNB": 42.32,
+      "SBICARD": -46.2,
+      "SJVN": -97.89,
+      "SOBHA": -10.45,
+      "TITAN": 10.83
+    },
+    "('pnl_pct', 'mean')": {
+      "BANKBARODA": 0.12,
+      "CANBK": 0.15,
+      "CUMMINSIND": 0.45,
+      "IGL": -0.08,
+      "MOTHERSON": 0.12,
+      "NATCOPHARM": -0.42,
+      "PNB": 0.21,
+      "SBICARD": -0.23,
+      "SJVN": -0.49,
+      "SOBHA": -0.06,
+      "TITAN": 0.06
+    }
+  },
+  "trades": [
+    {
+      "symbol": "BANKBARODA",
+      "entry_time": "2024-12-04 05:12:00+00:00",
+      "exit_time": "2024-12-04 06:25:00+00:00",
+      "entry_price": 255.84,
+      "exit_price": 256.15,
+      "pnl": 24.17999999999796,
+      "pnl_pct": 0.12116948092556826,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "CANBK",
+      "entry_time": "2024-12-04 05:16:00+00:00",
+      "exit_time": "2024-12-04 06:25:00+00:00",
+      "entry_price": 106.33,
+      "exit_price": 106.49,
+      "pnl": 30.07999999999936,
+      "pnl_pct": 0.15047493651838295,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "CUMMINSIND",
+      "entry_time": "2024-12-10 05:27:00+00:00",
+      "exit_time": "2024-12-10 06:30:00+00:00",
+      "entry_price": 3527.5,
+      "exit_price": 3543.4,
+      "pnl": 79.50000000000045,
+      "pnl_pct": 0.45074415308292254,
+      "exit_reason": "TIME_EXIT"
+    },
+    {
+      "symbol": "IGL",
+      "entry_time": "2024-12-03 04:45:00+00:00",
+      "exit_time": "2024-12-03 04:47:00+00:00",
+      "entry_price": 175.0,
+      "exit_price": 175.0205,
+      "pnl": 2.3369999999998186,
+      "pnl_pct": 0.011714285714284805,
+      "exit_reason": "TRAILING_SL"
+    },
+    {
+      "symbol": "IGL",
+      "entry_time": "2024-12-10 05:10:00+00:00",
+      "exit_time": "2024-12-10 05:13:00+00:00",
+      "entry_price": 196.25,
+      "exit_price": 195.9,
+      "pnl": -35.349999999999426,
+      "pnl_pct": -0.1783439490445831,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "MOTHERSON",
+      "entry_time": "2024-12-06 04:50:00+00:00",
+      "exit_time": "2024-12-06 04:53:00+00:00",
+      "entry_price": 115.53,
+      "exit_price": 115.67,
+      "pnl": 24.2200000000001,
+      "pnl_pct": 0.12118064571972698,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "NATCOPHARM",
+      "entry_time": "2024-12-06 04:52:00+00:00",
+      "exit_time": "2024-12-06 05:09:00+00:00",
+      "entry_price": 1446.7,
+      "exit_price": 1440.6,
+      "pnl": -79.30000000000177,
+      "pnl_pct": -0.4216492707541395,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "PNB",
+      "entry_time": "2024-12-04 05:32:00+00:00",
+      "exit_time": "2024-12-04 06:25:00+00:00",
+      "entry_price": 108.35,
+      "exit_price": 108.58,
+      "pnl": 42.32000000000073,
+      "pnl_pct": 0.2122750346100637,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "SBICARD",
+      "entry_time": "2024-12-04 04:45:00+00:00",
+      "exit_time": "2024-12-04 04:46:00+00:00",
+      "entry_price": 712.3,
+      "exit_price": 710.65,
+      "pnl": -46.19999999999936,
+      "pnl_pct": -0.2316439702372564,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "SJVN",
+      "entry_time": "2024-12-04 04:47:00+00:00",
+      "exit_time": "2024-12-04 05:15:00+00:00",
+      "entry_price": 118.53,
+      "exit_price": 117.94730000000001,
+      "pnl": -97.89359999999806,
+      "pnl_pct": -0.4916055007171083,
+      "exit_reason": "TRAILING_SL"
+    },
+    {
+      "symbol": "SOBHA",
+      "entry_time": "2024-12-04 05:11:00+00:00",
+      "exit_time": "2024-12-04 05:19:00+00:00",
+      "entry_price": 1699.25,
+      "exit_price": 1698.3,
+      "pnl": -10.4500000000005,
+      "pnl_pct": -0.055907017801974136,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "TITAN",
+      "entry_time": "2024-12-10 04:46:00+00:00",
+      "exit_time": "2024-12-10 06:19:00+00:00",
+      "entry_price": 3497.2,
+      "exit_price": 3499.36525,
+      "pnl": 10.826250000000073,
+      "pnl_pct": 0.06191381676770029,
+      "exit_reason": "TRAILING_SL"
+    }
+  ]
+}

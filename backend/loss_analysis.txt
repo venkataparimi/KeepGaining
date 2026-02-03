@@ -1,0 +1,30 @@
+14:36:04 | Analyzing 194 stocks
+
+====================================================================================================
+LOSS ANALYSIS - 1071 TRADES
+====================================================================================================
+
+1. WIN RATE BY TIME OF DAY:
+----------------------------------------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\code\KeepGaining\backend\scripts\analyze_losses.py", line 347, in <module>
+    asyncio.run(main())
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\asyncio\base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\code\KeepGaining\backend\scripts\analyze_losses.py", line 341, in main
+    await analyzer.analyze(start, end)
+  File "C:\code\KeepGaining\backend\scripts\analyze_losses.py", line 235, in analyze
+    self.print_analysis(total_trades, by_time, by_sector, by_signal_strength, by_volume)
+  File "C:\code\KeepGaining\backend\scripts\analyze_losses.py", line 270, in print_analysis
+    print(f"{marker} {time_slot} IST | {total_slot:3} trades | Win Rate: {win_rate:5.1f}%")
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2705' in position 0: character maps to <undefined>

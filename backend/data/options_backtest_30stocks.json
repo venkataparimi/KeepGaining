@@ -1,0 +1,42 @@
+{
+  "total_trades": 1,
+  "winners": 0,
+  "losers": 1,
+  "win_rate": 0.0,
+  "profit_factor": Infinity,
+  "total_pnl": 0.0,
+  "avg_pnl": 0.0,
+  "avg_winner": 0,
+  "avg_loser": 0.0,
+  "sharpe_ratio": 0,
+  "max_drawdown": 0.0,
+  "exit_reasons": {
+    "TRAILING_SL": 1
+  },
+  "symbol_stats": {
+    "('pnl', 'count')": {
+      "TITAN": 1
+    },
+    "('pnl', 'sum')": {
+      "TITAN": 0.0
+    },
+    "('pnl', 'mean')": {
+      "TITAN": 0.0
+    },
+    "('pnl_pct', 'mean')": {
+      "TITAN": 0.0
+    }
+  },
+  "trades": [
+    {
+      "symbol": "TITAN",
+      "entry_time": "2024-12-10 04:45:00+00:00",
+      "exit_time": "2024-12-10 06:19:00+00:00",
+      "entry_price": 3489.0,
+      "exit_price": 3499.36525,
+      "pnl": 0.0,
+      "pnl_pct": 0.0,
+      "exit_reason": "TRAILING_SL"
+    }
+  ]
+}

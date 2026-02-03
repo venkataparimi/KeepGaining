@@ -1,0 +1,37 @@
+Analyze the following trading signal for {symbol}:
+
+## Signal Details
+- Signal Type: {signal_type}
+- Entry Price: {entry_price}
+- Current Price: {current_price}
+- Timeframe: {timeframe}
+
+## Instrument Details
+{option_details}
+
+## Technical Indicators
+{indicators}
+
+## Market Context
+{market_context}
+
+Please provide a comprehensive analysis in valid JSON format (single-line strings, no line breaks in string values):
+
+{{
+  "sentiment": 0.0-1.0,
+  "confidence": 0.0-1.0,
+  "key_insights": ["insight1", "insight2", "insight3"],
+  "risks": ["risk1", "risk2"],
+  "trading_signals": ["signal1", "signal2"],
+  "citations": ["url1", "url2"]
+}}
+
+Include:
+1. **sentiment**: Overall bullish (>0.6) or bearish (<0.4) score for this signal
+2. **confidence**: How confident you are in this analysis (0-1)
+3. **key_insights**: 3-5 actionable insights about signal strength, technical validity, and market conditions
+4. **risks**: 2-3 key risks or concerns about this trade
+5. **trading_signals**: Recommended actions (entry timing, targets, stops)
+6. **citations**: URLs of sources used
+
+IMPORTANT: Return ONLY valid JSON. No markdown, no code blocks, no extra text. Ensure all string values are on a single line (no embedded newlines).

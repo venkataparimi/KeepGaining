@@ -1,0 +1,52 @@
+{
+  "total_trades": 2,
+  "winners": 0,
+  "losers": 2,
+  "win_rate": 0.0,
+  "profit_factor": 0.0,
+  "total_pnl": -2005.0,
+  "avg_pnl": -1002.5,
+  "avg_winner": 0,
+  "avg_loser": 1002.5,
+  "sharpe_ratio": -21.89,
+  "max_drawdown": 555.0,
+  "exit_reasons": {
+    "BIG_RED_CANDLE": 2
+  },
+  "symbol_stats": {
+    "('pnl', 'count')": {
+      "TCS": 2
+    },
+    "('pnl', 'sum')": {
+      "TCS": -2005.0
+    },
+    "('pnl', 'mean')": {
+      "TCS": -1002.5
+    },
+    "('pnl_pct', 'mean')": {
+      "TCS": -6.57
+    }
+  },
+  "trades": [
+    {
+      "symbol": "TCS",
+      "entry_time": "2024-11-06 04:48:00+00:00",
+      "exit_time": "2024-11-06 05:00:00+00:00",
+      "entry_price": 4091.25,
+      "exit_price": 4075.5,
+      "pnl": -1450.0,
+      "pnl_pct": -9.945130315500684,
+      "exit_reason": "BIG_RED_CANDLE"
+    },
+    {
+      "symbol": "TCS",
+      "entry_time": "2024-11-22 04:46:00+00:00",
+      "exit_time": "2024-11-22 04:52:00+00:00",
+      "entry_price": 4137.05,
+      "exit_price": 4133.15,
+      "pnl": -554.9999999999998,
+      "pnl_pct": -3.203463203463202,
+      "exit_reason": "BIG_RED_CANDLE"
+    }
+  ]
+}

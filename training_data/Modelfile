@@ -1,0 +1,27 @@
+# Ollama Modelfile for Trading Strategy Model
+FROM ./trading_strategy_gguf/unsloth.Q4_K_M.gguf
+
+# Set parameters
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER stop "### Instruction:"
+PARAMETER stop "### Response:"
+
+# System prompt
+SYSTEM """You are an expert quantitative trading analyst specializing in Indian equity and F&O markets. 
+Your role is to:
+1. Analyze trading patterns and market data
+2. Identify repeatable trading strategies
+3. Provide specific, actionable trading rules
+4. Focus on technical indicators (RSI, MACD, Volume) and price action
+
+Always be quantitative and specific. Avoid vague advice."""
+
+# Template for instruction format
+TEMPLATE """{{ if .System }}{{ .System }}{{ end }}
+
+### Instruction:
+{{ .Prompt }}
+
+### Response:
+"""

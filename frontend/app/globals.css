@@ -1,0 +1,119 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 15% 8%;
+    --foreground: 210 40% 98%;
+    --card: 220 15% 12%;
+    --card-foreground: 210 40% 98%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 271 91% 65%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 220 15% 20%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 160 84% 39%;
+    --accent-foreground: 0 0% 100%;
+    --border: 220 15% 20%;
+    --ring: 217 91% 60%;
+    --radius: 0.75rem;
+    --gradient-from: 217 91% 60%;
+    --gradient-via: 271 91% 65%;
+    --gradient-to: 160 84% 39%;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: 'Inter', sans-serif;
+    background: linear-gradient(135deg, hsl(220 15% 8%) 0%, hsl(220 20% 10%) 100%);
+    background-attachment: fixed;
+  }
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, hsl(var(--gradient-from)), hsl(var(--gradient-via)), hsl(var(--gradient-to)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gradient-bg {
+  background: linear-gradient(135deg, hsl(var(--gradient-from) / 0.1), hsl(var(--gradient-via) / 0.1), hsl(var(--gradient-to) / 0.1));
+}
+
+.glass {
+  background-color: hsl(var(--card) / 0.5);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.smooth-transition {
+  transition: all 0.3s ease-out;
+}
+
+.hover-lift {
+  transition: all 0.3s ease-out;
+}
+
+.hover-lift:hover {
+  transform: scale(1.02);
+  box-shadow: 0 25px 50px -12px hsl(var(--primary) / 0.2);
+}
+
+.animated-border {
+  position: relative;
+  background: hsl(var(--card));
+  border-radius: var(--radius);
+}
+
+.animate-number {
+  animation: slideFromBottom 0.4s ease-out;
+}
+
+@keyframes slideFromBottom {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Custom Scrollbar Styling */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: hsl(var(--border) / 0.5);
+  border-radius: 3px;
+  transition: background 0.2s ease;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--border) / 0.8);
+}
+
+/* Hide scrollbar when not hovering (optional) */
+.scrollbar-thin:not(:hover)::-webkit-scrollbar-thumb {
+  background: hsl(var(--border) / 0.3);
+}

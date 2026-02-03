@@ -1,0 +1,198 @@
+[
+    {
+        "date": "2025-12-01",
+        "stockName": "IEX",
+        "strike": 140,
+        "optionType": "CE",
+        "entryPremium": 9.0
+    },
+    {
+        "date": "2025-12-01",
+        "stockName": "Hind Zinc",
+        "strike": 500,
+        "optionType": "CE",
+        "entryPremium": 14.0
+    },
+    {
+        "date": "2025-12-01",
+        "stockName": "Hero Motors",
+        "strike": 6200,
+        "optionType": "CE",
+        "entryPremium": 195.0
+    },
+    {
+        "date": "2025-12-01",
+        "stockName": "TVS Motor",
+        "strike": 3600,
+        "optionType": "CE",
+        "entryPremium": 105.0
+    },
+    {
+        "date": "2025-12-02",
+        "stockName": "Idea",
+        "strike": 10,
+        "optionType": "CE",
+        "entryPremium": 0.85
+    },
+    {
+        "date": "2025-12-02",
+        "stockName": "Paytm",
+        "strike": 1320,
+        "optionType": "CE",
+        "entryPremium": 56.0
+    },
+    {
+        "date": "2025-12-02",
+        "stockName": "GMR",
+        "strike": 105,
+        "optionType": "CE",
+        "entryPremium": 4.0
+    },
+    {
+        "date": "2025-12-02",
+        "stockName": "Asian Paints",
+        "strike": 2900,
+        "optionType": "CE",
+        "entryPremium": 88.0
+    },
+    {
+        "date": "2025-12-02",
+        "stockName": "Can Bank",
+        "strike": 150,
+        "optionType": "CE",
+        "entryPremium": 6.0
+    },
+    {
+        "date": "2025-12-03",
+        "stockName": "Delhivery",
+        "strike": 410,
+        "optionType": "PE",
+        "entryPremium": 12.0
+    },
+    {
+        "date": "2025-12-03",
+        "stockName": "Angel One",
+        "strike": 2700,
+        "optionType": "PE",
+        "entryPremium": 142.0
+    },
+    {
+        "date": "2025-12-04",
+        "stockName": "Kaynes",
+        "strike": 5200,
+        "optionType": "PE",
+        "entryPremium": 160.0
+    },
+    {
+        "date": "2025-12-04",
+        "stockName": "Indigo",
+        "strike": 5500,
+        "optionType": "PE",
+        "entryPremium": 140.0
+    },
+    {
+        "date": "2025-12-04",
+        "stockName": "Petronet",
+        "strike": 270,
+        "optionType": "CE",
+        "entryPremium": 9.0
+    },
+    {
+        "date": "2025-12-05",
+        "stockName": "Power India",
+        "strike": 19500,
+        "optionType": "PE",
+        "entryPremium": 730.0
+    },
+    {
+        "date": "2025-12-05",
+        "stockName": "Shriram Fin",
+        "strike": 840,
+        "optionType": "CE",
+        "entryPremium": 29.0
+    },
+    {
+        "date": "2025-12-05",
+        "stockName": "Oberoi Realty",
+        "strike": 1680,
+        "optionType": "CE",
+        "entryPremium": 37.0
+    },
+    {
+        "date": "2025-12-11",
+        "stockName": "Hind Zinc",
+        "strike": 510,
+        "optionType": "CE",
+        "entryPremium": 16.0
+    },
+    {
+        "date": "2025-12-11",
+        "stockName": "Idea",
+        "strike": 11,
+        "optionType": "CE",
+        "entryPremium": 0.65
+    },
+    {
+        "date": "2025-12-12",
+        "stockName": "Hind Zinc",
+        "strike": 530,
+        "optionType": "CE",
+        "entryPremium": 18.0
+    },
+    {
+        "date": "2025-12-15",
+        "stockName": "Vedl",
+        "strike": 540,
+        "optionType": "CE",
+        "entryPremium": 16.5
+    },
+    {
+        "date": "2025-12-15",
+        "stockName": "Hind Zinc",
+        "strike": 560,
+        "optionType": "CE",
+        "entryPremium": 21.0
+    },
+    {
+        "date": "2025-12-16",
+        "stockName": "Supreme",
+        "strike": 3200,
+        "optionType": "CE",
+        "entryPremium": 165.0
+    },
+    {
+        "date": "2025-12-16",
+        "stockName": "Axis",
+        "strike": 1250,
+        "optionType": "PE",
+        "entryPremium": 18.0
+    },
+    {
+        "date": "2025-12-16",
+        "stockName": "RBL",
+        "strike": 300,
+        "optionType": "PE",
+        "entryPremium": 5.7
+    },
+    {
+        "date": "2025-12-17",
+        "stockName": "Hind Zinc",
+        "strike": 580,
+        "optionType": "CE",
+        "entryPremium": 15.0
+    },
+    {
+        "date": "2025-12-17",
+        "stockName": "Max Health",
+        "strike": 1060,
+        "optionType": "PE",
+        "entryPremium": 27.0
+    },
+    {
+        "date": "2025-12-17",
+        "stockName": "Vedl",
+        "strike": 570,
+        "optionType": "CE",
+        "entryPremium": 15.8
+    }
+]
