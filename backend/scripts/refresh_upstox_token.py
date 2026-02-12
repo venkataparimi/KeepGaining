@@ -21,8 +21,8 @@ load_dotenv()
 async def refresh_token():
     """Guide user through Upstox token refresh"""
     
-    api_key = os.getenv('UPSTOX_CLIENT_ID')
-    api_secret = os.getenv('UPSTOX_CLIENT_SECRET')
+    api_key = os.getenv('UPSTOX_API_KEY')
+    api_secret = os.getenv('UPSTOX_API_SECRET')
     redirect_uri = os.getenv('UPSTOX_REDIRECT_URI', 'http://localhost:8000/callback')
     
     if not api_key or not api_secret:

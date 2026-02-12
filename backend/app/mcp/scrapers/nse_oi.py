@@ -148,51 +148,134 @@ class NSE_OI_Scraper(BaseScraper):
         
         return results
     
-    async def _scrape_option_chain(self, symbol: str) -> Optional[Dict[str, Any]]:
+    async def _scrape_option_chain(self, symbol: str, headless: bool = True) -> Optional[Dict[str, Any]]:
         """
-        Scrape option chain data for a symbol.
-        
-        Uses Playwright to:
-        1. Visit home page (to establish session/cookies)
-        2. Fetch internal API data directly
+        Scrape option chain data using Playwright.
+        Uses cookies from home page and fetches API data directly.
         """
-        logger.debug(f"NSE_OI: Scraping option chain for {symbol}")
-        
+        data = None
         try:
             from playwright.async_api import async_playwright
-            
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                # Use specific user agent to mimic real user
+                browser = await p.chromium.launch(headless=headless, args=["--disable-http2"])
+                
                 context = await browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, right Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080},
+                    extra_http_headers={
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Upgrade-Insecure-Requests": "1"
+                    }
                 )
+                
                 page = await context.new_page()
                 
-                # 1. Visit Home Page (Crucial for NSE cookies)
-                await page.goto(self.BASE_URL, timeout=30000)
+                # 1. Visit Homepage to set cookies
+                logger.info("NSE_OI: Visiting NSE Homepage for session...")
+                try:
+                    await page.goto("https://www.nseindia.com", timeout=45000)
+                    await page.wait_for_timeout(2000) # Wait for cookies
+                except Exception as e:
+                     logger.warning(f"NSE_OI: Details - {e}")
+
+                # 2. Determine API URL based on symbol type
+                if symbol.upper() in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
+                    api_url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol.upper()}"
+                else:
+                    api_url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol.upper()}"
+
+                logger.info(f"NSE_OI: Fetching API data from {api_url}")
+
+                # 3. Fetch Data via Page Context
+                data = await page.evaluate(f"""async () => {{
+                    try {{
+                        const response = await fetch("{api_url}", {{
+                            headers: {{
+                                "Accept": "application/json, text/plain, */*",
+                                "X-Requested-With": "XMLHttpRequest"
+                            }}
+                        }});
+                        if (!response.ok) return null;
+                        return await response.json();
+                    }} catch (e) {{ return null; }}
+                }}""")
+
+                if not data:
+                     logger.error(f"NSE_OI: Failed to fetch data for {symbol}")
+                     # Try V3 fallback if NIFTY
+                     if "NIFTY" in symbol.upper():
+                         v3_url = f"https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol={symbol.upper()}"
+                         logger.info(f"NSE_OI: Retrying with V3 URL: {v3_url}")
+                         data = await page.evaluate(f"""async () => {{
+                            try {{
+                                const response = await fetch("{v3_url}", {{
+                                    headers: {{ "X-Requested-With": "XMLHttpRequest" }}
+                                }});
+                                return await response.json();
+                            }} catch (e) {{ return null; }}
+                        }}""")
                 
-                # 2. Fetch Option Chain API
-                api_url = f"{self.BASE_URL}{self.OPTION_CHAIN_URL}?symbol={symbol}"
-                
-                # Wait a bit after home page load
-                await asyncio.sleep(1)
-                
-                response = await page.goto(api_url)
-                if not response.ok:
-                    logger.error(f"NSE_OI: API request failed: {response.status}")
-                    await browser.close()
-                    return None
-                    
-                data = await response.json()
                 await browser.close()
-                
-                return data
 
         except Exception as e:
             logger.error(f"NSE_OI: Scrape error for {symbol}: {e}")
             return None
+            
+        return data           
     
+    async def get_premarket_data(self, category: str = "NIFTY", headless: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        Fetch pre-open market data.
+        Category: 'NIFTY', 'BANKNIFTY', 'FO' (F&O stocks)
+        """
+        url_map = {
+            "NIFTY": "https://www.nseindia.com/api/market-data-pre-open?key=NIFTY",
+            "BANKNIFTY": "https://www.nseindia.com/api/market-data-pre-open?key=BANKNIFTY",
+            "FO": "https://www.nseindia.com/api/market-data-pre-open?key=FO"
+        }
+        
+        target_url = url_map.get(category, url_map["NIFTY"])
+        
+        try:
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=headless, args=["--disable-http2"])
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    extra_http_headers={"Upgrade-Insecure-Requests": "1"}
+                )
+                page = await context.new_page()
+                
+                # Visit Pre-open page directly to set cookies (lighter than homepage)
+                try:
+                    await page.goto("https://www.nseindia.com/market-data/pre-open-market-cm-and-emerge-market", timeout=45000, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(3000) 
+                except Exception as e:
+                    logger.warning(f"NSE_OI: Page load warning: {e}")
+                
+                logger.info(f"NSE_OI: Fetching Pre-market data from {target_url}")
+                data = await page.evaluate(f"""async () => {{
+                    try {{
+                        const response = await fetch("{target_url}", {{
+                            headers: {{ "X-Requested-With": "XMLHttpRequest" }}
+                        }});
+                        return await response.json();
+                    }} catch (e) {{ return null; }}
+                }}""")
+                
+                if not data:
+                    logger.error(f"NSE_OI: Premarket data null for {category}")
+                    # Screenshot if visible or headless
+                    try: await page.screenshot(path="nse_premarket_fail.png")
+                    except: pass
+                
+                await browser.close()
+                return data
+        except Exception as e:
+            logger.error(f"NSE_OI: Premarket fetch failed: {e}")
+            return None
+
     async def _scrape_fii_dii(self) -> Optional[Dict[str, Any]]:
         """
         Scrape FII/DII data.

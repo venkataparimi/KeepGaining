@@ -48,7 +48,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from app.db.session import AsyncSessionLocal
 from app.db.models.instrument import InstrumentMaster
-from app.db.models import CandleData
+from app.db.models import CandleData, BrokerSymbolMapping
 from app.services.data_providers.upstox import UpstoxDataProvider
 from app.services.data_providers.base import DataProviderConfig, Interval, Exchange
 from sqlalchemy import select, and_
@@ -141,6 +141,33 @@ async def check_existing_data(db, instrument_id: str, timeframe: str, start_date
         return set()
 
 
+import gzip
+import io
+import aiohttp
+
+async def fetch_upstox_keys() -> dict:
+    """Fetch Upstox instrument keys for NSE."""
+    url = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
+    print(f"⏳ Fetching instrument keys from {url}...")
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status == 200:
+                content = await response.read()
+                with gzip.GzipFile(fileobj=io.BytesIO(content)) as f:
+                    data = json.loads(f.read().decode('utf-8'))
+                
+                cache = {}
+                for item in data:
+                    if item.get('trading_symbol'):
+                         cache[item['trading_symbol']] = item.get('instrument_key')
+                
+                print(f"✅ Loaded {len(cache)} instrument keys")
+                return cache
+            else:
+                print(f"❌ Failed to fetch keys: {response.status}")
+                return {}
+
 async def download_and_store_data(
     provider: UpstoxDataProvider,
     instrument_id: str,
@@ -148,6 +175,7 @@ async def download_and_store_data(
     timeframe: str,
     start_date: date,
     end_date: date,
+    upstox_cache: dict = None,
     skip_existing: bool = True
 ):
     """Download data from Upstox and store in database"""
@@ -181,10 +209,32 @@ async def download_and_store_data(
         # Create Instrument object for the provider
         from app.services.data_providers.base import Instrument as ProviderInstrument, InstrumentType, Exchange
         
-        # Upstox instrument key format for equity: NSE_EQ|SYMBOL
-        provider_token = f"NSE_EQ|{symbol}"
+        # Upstox instrument key lookup
+        provider_token = None
         
-        print(f"  🔑 Using instrument key: {provider_token}")
+        # 1. Try cache (dynamic fetch)
+        if upstox_cache:
+            provider_token = upstox_cache.get(symbol)
+            if provider_token:
+                print(f"  🔑 Found cached token: {provider_token}")
+        
+        # 2. Try DB Mapping
+        if not provider_token:
+            async with AsyncSessionLocal() as db:
+                stmt = select(BrokerSymbolMapping).where(
+                    BrokerSymbolMapping.instrument_id == instrument_id,
+                    BrokerSymbolMapping.broker_name == 'UPSTOX'
+                )
+                mapping_result = await db.execute(stmt)
+                mapping = mapping_result.scalar_one_or_none()
+                if mapping and mapping.broker_token:
+                    provider_token = mapping.broker_token
+                    print(f"  🔑 Found mapped token: {provider_token}")
+
+        # 3. Fallback
+        if not provider_token:
+             provider_token = f"NSE_EQ|{symbol}"
+             print(f"  ⚠️  No mapping found, using fallback: {provider_token}")
         
         instrument_obj = ProviderInstrument(
             symbol=symbol,
@@ -205,11 +255,7 @@ async def download_and_store_data(
         
         if not candles:
             print("❌ No data returned from API")
-            print(f"   This could mean:")
-            print(f"   1. Invalid instrument key: {provider_token}")
-            print(f"   2. No trading on this date (check if it's a weekend/holiday)")
-            print(f"   3. Symbol doesn't exist or is named differently")
-            print(f"   4. API authentication issue")
+            print(f"   Key used: {provider_token}")
             return
         
         # Filter out existing
@@ -384,6 +430,9 @@ async def main():
     
     provider = UpstoxDataProvider(config)
     
+    # Fetch Upstox Keys
+    upstox_cache = await fetch_upstox_keys()
+    
     # Process each symbol × timeframe combination
     total_operations = len(symbols) * len(timeframes)
     current_operation = 0
@@ -413,6 +462,7 @@ async def main():
                     timeframe,
                     start_date,
                     end_date,
+                    upstox_cache=upstox_cache,
                     skip_existing=not args.force
                 )
     

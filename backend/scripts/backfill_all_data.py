@@ -195,6 +195,14 @@ async def build_instrument_key_cache() -> Dict[str, str]:
                             cache[trading_symbol.upper()] = instrument_key
                     
                     logger.info(f"Built cache with {len(cache)} entries from {len(data)} instruments")
+                    
+                    if 'RELIANCE' in cache:
+                        logger.info(f"✅ RELIANCE found in Upstox cache: {cache['RELIANCE']}")
+                    else:
+                        logger.error("❌ RELIANCE NOT found in Upstox cache!")
+                        # Debug: print first 5 keys
+                        keys = list(cache.keys())[:5]
+                        logger.info(f"Sample keys: {keys}")
         except Exception as e:
             logger.error(f"Failed to download NSE instruments: {e}")
             raise
@@ -763,6 +771,21 @@ async def analyze_only():
         total_inst += len(insts)
     
     print(f"\nTotal Estimate: {total_inst} instruments")
+    
+    # Check RELIANCE specifically
+    print("\n--- RELIANCE Check ---")
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT instrument_id FROM instrument_master WHERE trading_symbol = 'RELIANCE'")
+        if row:
+            inst_id = row['instrument_id']
+            cnt = await conn.fetchval("SELECT COUNT(*) FROM candle_data WHERE instrument_id = $1", inst_id)
+            latest = await conn.fetchval("SELECT MAX(timestamp) FROM candle_data WHERE instrument_id = $1", inst_id)
+            print(f"RELIANCE Candles: {cnt}")
+            if latest:
+                print(f"Latest Timestamp: {latest}")
+        else:
+            print("RELIANCE not found in DB")
+
     await pool.close()
 
 

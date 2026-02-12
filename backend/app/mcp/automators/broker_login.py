@@ -152,99 +152,116 @@ class BrokerLoginAutomator(BaseAutomator):
         credentials: Optional[BrokerCredentials] = None
     ) -> LoginResult:
         """
-        Login to Fyers using browser automation.
+        Login to Fyers using Playwright.
         
         Flow:
-        1. Navigate to Fyers login page
-        2. Enter client ID and password
-        3. Handle TOTP/PIN verification
-        4. Extract access token from redirect
+        1. Generate Auth URL (using FyersModel or manually constructed)
+        2. Navigate to URL
+        3. Enter Client ID -> Submit
+        4. Enter PIN -> Submit (or Password if different flow)
+        5. Enter TOTP -> Submit
+        6. Capture Redirect -> Auth Code
         """
-        creds = credentials or self.credentials.get(BrokerType.FYERS)
-        if not creds:
-            return LoginResult(
-                success=False,
-                broker=BrokerType.FYERS,
-                error="No Fyers credentials provided"
-            )
-        
-        logger.info("BrokerLogin: Starting Fyers login...")
-        
         try:
+            from app.core.config import settings
             from playwright.async_api import async_playwright
+            import urllib.parse
+            
+            # Use settings if no specific credentials passed
+            client_id = credentials.client_id if credentials else settings.FYERS_CLIENT_ID
+            # Note: broker_login.py uses generic 'password' field, but Fyers uses PIN. 
+            # We map PIN to password in credentials object or use settings directly.
+            pin = credentials.password if credentials else settings.FYERS_PIN 
+            totp_key = credentials.totp_secret if credentials else settings.FYERS_TOTP_KEY
+            user_id = settings.FYERS_USER_ID
+            redirect_uri = settings.FYERS_REDIRECT_URI
+            
+            if not (client_id and pin and totp_key and user_id):
+                return LoginResult(success=False, broker=BrokerType.FYERS, error="Missing Fyers credentials in settings")
+
+            # Construct Auth URL (simpler than importing fyersModel just for this string)
+            # Or use the one from settings/logic if available. 
+            # Standard V3 Auth URL construction:
+            state = "mcp_login"
+            auth_url = (
+                f"https://api-t1.fyers.in/api/v3/generate-authcode?"
+                f"client_id={client_id}&redirect_uri={redirect_uri}&"
+                f"response_type=code&state={state}"
+            )
+            
+            logger.info(f"BrokerLogin: Starting Fyers login for {user_id}")
             
             async with async_playwright() as p:
-                # Launch browser (headless by default)
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context()
+                browser = await p.chromium.launch(headless=True, args=["--disable-http2"])
+                context = await browser.new_context(
+                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, right Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
                 page = await context.new_page()
                 
-                logger.info(f"BrokerLogin: Navigating to {self.FYERS_LOGIN_URL}")
+                await page.goto(auth_url)
                 
-                # Note: Real implementation needs the full OAuth URL with redirect_uri
-                # This is a template for the interaction flow
-                await page.goto(self.FYERS_LOGIN_URL)
+                # Screen 1: Mobile or Client ID (Login with Client ID)
+                # Check if we need to switch to Client ID view
+                try:
+                    login_client_id_btn = page.locator("text='Login with Client ID'")
+                    if await login_client_id_btn.is_visible():
+                         await login_client_id_btn.click()
+                except:
+                    pass
                 
-                # Step 1: Client ID
-                # Wait for either mobile input or client ID input
-                # Fyers often changes selectors, robust finding needed
-                client_id_input = page.locator("input[id='fyers_id'], input[name='fyers_id']")
-                await client_id_input.wait_for()
-                await client_id_input.fill(creds.client_id)
-                await page.click("button:has-text('Continue'), button[id='btn_id']")
+                # Enter Client ID
+                await page.fill("input[name='fy_client_id'], input[id='fy_client_id']", user_id)
+                await page.click("button[id='clientIdSubmit']")
                 
-                # Step 2: Password
-                password_input = page.locator("input[type='password']")
-                await password_input.wait_for()
-                await password_input.fill(creds.password)
-                await page.click("button:has-text('Continue'), button[id='submit-login']")
+                # Screen 2: PIN (Wait for it)
+                # Fyers V3 usually asks for PIN next
+                try:
+                    await page.wait_for_selector("input[type='password']", timeout=10000)
+                    await page.fill("input[type='password']", pin)
+                    await page.click("button[id='verifyPinSubmit']")
+                except Exception as e:
+                    # Fallback: maybe it asked for password (rare now)
+                    logger.warning(f"BrokerLogin: PIN entry issue: {e}. Checking for error.")
                 
-                # Step 3: TOTP/PIN
-                # Wait for OTP input
-                otp_input = page.locator("input[id='first'], input[class*='otp']")
-                await otp_input.wait_for(timeout=10000)
+                # Screen 3: TOTP
+                await page.wait_for_selector("input[id='first'], input[class*='otp']", timeout=10000)
                 
-                if creds.totp_secret and PYOTP_AVAILABLE:
-                    totp = pyotp.TOTP(creds.totp_secret)
+                if totp_key and PYOTP_AVAILABLE:
+                    totp = pyotp.TOTP(totp_key)
                     otp = totp.now()
-                    logger.info(f"BrokerLogin: Entering TOTP")
                     
-                    # Fyers often has 6 separate inputs for OTP
-                    # We need to fill them one by one or paste
-                    # Trying to fill the hidden actual input or the first visible one
+                    # Fyers might have 6 inputs or 1
                     inputs = await page.locator("input[type='number']").all()
                     if len(inputs) >= 6:
-                        for i, char in enumerate(otp):
-                            await inputs[i].fill(char)
+                         for i, char in enumerate(otp):
+                             await inputs[i].fill(char)
                     else:
-                        # Fallback to single input
-                        await otp_input.fill(otp)
-                        
-                    await page.click("button:has-text('Submit'), button[id='btn_id']")
+                         await page.fill("input[id='first']", otp)
+                         
+                    # Auto-submit or click button
+                    try:
+                        await page.click("button[id='verifyTotpSubmit']", timeout=2000)
+                    except:
+                        pass # Might auto submit
                 
-                # Step 4: Wait for redirect and extract token
-                # The auth code comes in the URL param 'auth_code'
-                async with page.expect_navigation(url_predicate=lambda url: "auth_code=" in url.url, timeout=20000) as response:
+                # Wait for Redirect
+                async with page.expect_navigation(url_predicate=lambda url: "auth_code=" in url.url, timeout=20000):
                      pass
                 
                 final_url = page.url
-                logger.info(f"BrokerLogin: Redirected to {final_url}")
-                
-                # Extract auth code from URL
-                from urllib.parse import parse_qs, urlparse
-                parsed = urlparse(final_url)
-                params = parse_qs(parsed.query)
+                parsed = urllib.parse.urlparse(final_url)
+                params = urllib.parse.parse_qs(parsed.query)
                 auth_code = params.get("auth_code", [None])[0]
                 
-                if not auth_code:
-                    raise ValueError("Auth code not found in redirect URL")
-                
                 await browser.close()
+                
+                if not auth_code:
+                    return LoginResult(success=False, broker=BrokerType.FYERS, error="Auth code not in redirect URL")
                 
                 return LoginResult(
                     success=True,
                     broker=BrokerType.FYERS,
-                    access_token=auth_code,  # This is auth code, needs swapping for token
+                    access_token=auth_code, # Needs exchange
                     error=None
                 )
 
@@ -261,41 +278,56 @@ class BrokerLoginAutomator(BaseAutomator):
         credentials: Optional[BrokerCredentials] = None
     ) -> LoginResult:
         """
-        Login to Upstox using browser automation.
-        
-        Flow:
-        1. Navigate to Upstox login page
-        2. Enter mobile/client ID
-        3. Handle mobile OTP (requires external input)
-        4. Enter PIN
-        5. Extract access token
+        Login to Upstox using the dedicated UpstoxAuthAutomation service.
         """
-        creds = credentials or self.credentials.get(BrokerType.UPSTOX)
-        if not creds:
-            return LoginResult(
-                success=False,
-                broker=BrokerType.UPSTOX,
-                error="No Upstox credentials provided"
-            )
-        
-        logger.info("BrokerLogin: Starting Upstox login...")
-        
         try:
-            # Similar flow to Fyers but with mobile OTP
-            # OTP handling options:
-            # 1. Manual input (pause and wait)
-            # 2. SMS gateway integration
-            # 3. TOTP if Upstox supports it
+            from app.brokers.upstox_auth_automation import UpstoxAuthAutomation
+            from app.core.config import settings
             
-            logger.info("BrokerLogin: Upstox login flow prepared (MCP integration pending)")
+            # Initialize automation service
+            # We use the settings from config by default if credentials not passed
+            auth = UpstoxAuthAutomation()
             
-            return LoginResult(
-                success=True,
-                broker=BrokerType.UPSTOX,
-                access_token="pending_mcp_integration",
-                error=None
+            # Determine credentials
+            mobile = credentials.client_id if credentials else settings.upstox.mobile
+            pin = credentials.password if credentials else settings.upstox.pin
+            totp = credentials.totp_secret if credentials else settings.upstox.totp_secret
+            
+            if not (mobile and pin):
+                return LoginResult(
+                    success=False, 
+                    broker=BrokerType.UPSTOX, 
+                    error="Missing Upstox Mobile or PIN in settings"
+                )
+            
+            logger.info(f"BrokerLogin: Starting Upstox login for {mobile}")
+            
+            # Run authentication
+            # Note: UpstoxAuthAutomation manages its own Playwright instance
+            token_data = await auth.authenticate(
+                mobile_or_email=mobile,
+                pin=pin,
+                totp_secret=totp,
+                headless=True,
+                timeout=60
             )
             
+            access_token = token_data.get("access_token")
+            
+            if access_token:
+                return LoginResult(
+                    success=True,
+                    broker=BrokerType.UPSTOX,
+                    access_token=access_token,
+                    error=None
+                )
+            else:
+                return LoginResult(
+                    success=False,
+                    broker=BrokerType.UPSTOX,
+                    error="Login info returned but no access token found"
+                )
+
         except Exception as e:
             logger.error(f"BrokerLogin: Upstox login failed: {e}")
             return LoginResult(

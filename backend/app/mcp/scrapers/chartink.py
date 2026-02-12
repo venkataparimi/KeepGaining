@@ -185,37 +185,183 @@ class ChartinkScraper(BaseScraper):
     async def run_custom_query(
         self,
         query: str,
-        name: str = "Custom"
+        name: str = "Custom",
+        headless: bool = True
     ) -> Optional[ScreenerResult]:
         """
         Run a custom Chartink query.
         
-        Uses Chrome DevTools MCP to:
+        Uses Playwright to:
         1. Navigate to Chartink screener
         2. Enter custom query
         3. Execute and parse results
         """
         logger.debug(f"Chartink: Running query '{name}'")
-        
         start_time = datetime.now()
         
-        # MCP Integration:
-        # 1. mcp_chrome-devtools_navigate_page to Chartink
-        # 2. mcp_chrome-devtools_fill for query input
-        # 3. mcp_chrome-devtools_click for submit
-        # 4. mcp_chrome-devtools_wait_for results table
-        # 5. mcp_chrome-devtools_evaluate_script to extract data
-        
-        # Placeholder until MCP integration
-        execution_time = (datetime.now() - start_time).total_seconds() * 1000
-        
-        return ScreenerResult(
-            screener_name=name,
-            timestamp=datetime.now(),
-            stocks=[],
-            total_count=0,
-            execution_time_ms=execution_time
-        )
+        try:
+            from playwright.async_api import async_playwright
+            
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=headless)
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080}
+                )
+                page = await context.new_page()
+                
+                # Navigate to empty screener or a generic one
+                await page.goto("https://chartink.com/screener/process", timeout=60000)
+                
+                # Chartink oftens redirects to /screener/time-pass
+                # Wait for main container to load
+                try:
+                    await page.wait_for_selector("body", timeout=10000)
+                except:
+                    pass
+
+                # Scan Clause might be inside a form or iframe or just directly on page
+                # Trying robust selector strategy
+                # Some pages use #scan_clause, others use name='scan_clause' (hidden), others use a div
+                # We'll try to click the "Reset" button to ensure clean slate, or just fill the visible editor
+                
+                # Wait for ANY potential input area
+                try:
+                    await page.wait_for_selector(".atlas-codemirror-wrapper, textarea#scan_clause, textarea[name='scan_clause']", timeout=15000)
+                except:
+                    logger.warning("Chartink: Primary selector failed. Retrying /screener/.")
+                    # Retry navigation to base screener
+                    await page.goto("https://chartink.com/screener/", timeout=60000)
+                    await page.wait_for_selector("body", timeout=15000)
+
+                # Use force=True to fill hidden textareas if necessary
+                
+                textarea = page.locator("textarea[name='scan_clause'], textarea#scan_clause, #scan_clause").first
+                if await textarea.count() == 0:
+                     logger.warning("Chartink: Textarea not found.")
+                     
+                     # Debug dump
+                     try:
+                        await page.screenshot(path="chartink_missing_textarea.png", full_page=True)
+                        content = await page.content()
+                        with open("chartink_debug.html", "w", encoding="utf-8") as f:
+                            f.write(content)
+                        logger.info("Saved debug artifacts to chartink_debug.html")
+                     except: 
+                        pass
+                        
+                     if not headless:
+                         logger.info("Chartink: Textarea missing. Debugging (30s)...")
+                # Navigate to screener page
+                logger.info("Chartink: Navigating to screener page...")
+                await page.goto("https://chartink.com/screener/", timeout=60000)
+                
+                # Wait for hydration
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=10000)
+                except:
+                    logger.info("Chartink: networkidle timeout, proceeding...")
+
+                # Wait for the app to mount - looking for textarea or root
+                try:
+                    # Generic wait for any textarea
+                    textarea = page.locator("textarea").first
+                    await textarea.wait_for(state="visible", timeout=10000)
+                    await textarea.fill(query)
+                except Exception:
+                    logger.warning("Chartink: Primary textarea not found, searching DOM...")
+                    # Log accessible elements
+                    textareas = await page.locator("textarea").all()
+                    logger.info(f"Chartink: Found {len(textareas)} textareas in DOM")
+                    
+                    if len(textareas) > 0:
+                        await textareas[0].fill(query)
+                    else:
+                        raise Exception("No textarea found for query input")
+                
+                # Click Run Scan
+                await page.click("//button[contains(text(), 'Run Scan')]", timeout=5000)
+                
+                # Wait for results
+                try:
+                    # Wait for table OR error message OR "No stocks filtered"
+                    # We race these conditions
+                    await page.wait_for_selector("table.table-striped, .dataTables_wrapper, text=No stocks filtered", timeout=20000)
+                except Exception:
+                     # Check if maybe an alert appeared
+                     pass
+
+                if await page.locator("text=No stocks filtered").count() > 0:
+                    await browser.close()
+                    return ScreenerResult(
+                        screener_name=name,
+                        timestamp=datetime.now(),
+                        stocks=[],
+                        total_count=0,
+                        execution_time_ms=(datetime.now() - start_time).total_seconds() * 1000
+                    )
+                
+                # Extract data from table
+                stocks = []
+                # Use robust selector for rows
+                rows = await page.locator("table.table-striped tbody tr").all()
+                
+                for row in rows:
+                    cols = await row.locator("td").all()
+                    if len(cols) >= 3:
+                        # Typical columns: Sr, Symbol, ..., Close, Volume, ...
+                        # Column order varies by screener!
+                        # But typically Symbol is 2nd or 3rd (index 1 or 2)
+                        
+                        # We need to map columns dynamically based on header
+                        # For now, simplistic extraction based on Chartink default view
+                        # Assuming: Sr, Symbol, Links, %, Price, ...
+                        
+                        symbol_text = await cols[2].inner_text() # Symbol often at index 2 (0-based)
+                        price_text = await cols[4].inner_text()  # Price often at 4
+                        
+                        # Clean data
+                        symbol = symbol_text.strip()
+                        try:
+                            price = float(price_text.replace(",", ""))
+                        except:
+                            price = 0.0
+                            
+                        stocks.append(ScreenerStock(
+                            symbol=symbol,
+                            name=symbol, # Name often not shown clearly in simple view
+                            price=price
+                        ))
+                
+                await browser.close()
+                
+                execution_time = (datetime.now() - start_time).total_seconds() * 1000
+                logger.info(f"Chartink: '{name}' returned {len(stocks)} stocks")
+                
+                return ScreenerResult(
+                    screener_name=name,
+                    timestamp=datetime.now(),
+                    stocks=stocks,
+                    total_count=len(stocks),
+                    execution_time_ms=execution_time
+                )
+
+        except Exception as e:
+            logger.error(f"Chartink: Query '{name}' failed: {e}")
+            try:
+                await page.screenshot(path="chartink_error.png", full_page=True)
+                content = await page.content()
+                with open("chartink_debug.html", "w", encoding="utf-8") as f:
+                    f.write(content)
+                logger.info("Saved failure artifacts: chartink_error.png, chartink_debug.html")
+            except:
+                pass
+            
+            if not headless:
+                logger.info("Chartink: Browser open for debugging (30s)...")
+                await asyncio.sleep(30)
+                
+            return None
     
     def get_latest_results(self, screener_id: str) -> Optional[ScreenerResult]:
         """Get cached results for a screener."""

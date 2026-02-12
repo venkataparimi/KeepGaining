@@ -52,6 +52,7 @@ SEGMENTS = [
     'indices_bse',
     'fo_current',
     'fo_historical',
+    'fo_expired',
     'indicators'
 ]
 
@@ -237,6 +238,177 @@ async def sync_indicators(config: Dict, dry_run: bool = False) -> int:
         return 0
 
 
+async def sync_fo_expired(config: Dict, dry_run: bool = False) -> int:
+    """Sync expired F&O options data (NIFTY, BANKNIFTY, SENSEX, BANKEX weekly expiries).
+    
+    Uses sync_status.json to track which expiries have been synced.
+    Only syncs new expiries that haven't been processed yet.
+    """
+    logger.info("=" * 60)
+    logger.info("SYNCING: Expired F&O Options (Historical Weekly Expiries)")
+    logger.info("=" * 60)
+    
+    if dry_run:
+        logger.info("  [DRY RUN] Would sync expired F&O options")
+        return 10000
+    
+    from scripts.backfill_expired_data import get_expired_expiries, get_expired_option_contracts, \
+        download_expired_candles, save_candles_to_db, ensure_instrument, get_upstox_token
+    import asyncpg
+    
+    token = get_upstox_token()
+    if not token:
+        logger.error("No Upstox token found")
+        return 0
+    
+    # Indices to sync
+    INDICES = [
+        ('NIFTY', 'OPTIDX', 'NSE_INDEX|Nifty 50'),
+        ('BANKNIFTY', 'OPTIDX', 'NSE_INDEX|Nifty Bank'),
+        ('FINNIFTY', 'OPTIDX', 'NSE_INDEX|Nifty Fin Service'),
+        ('SENSEX', 'OPTIDX', 'BSE_INDEX|SENSEX'),
+        ('BANKEX', 'OPTIDX', 'BSE_INDEX|BANKEX'),
+    ]
+    
+    # Initialize fo_expired tracking in config if not exists
+    if 'fo_expired' not in config.get('segments', {}):
+        config['segments']['fo_expired'] = {
+            'description': 'Expired F&O options (historical weekly expiries)',
+            'last_sync': None,
+            'status': 'pending',
+            # Track the oldest synced expiry per underlying - everything before this is complete
+            'oldest_synced_expiry': {},  # {underlying: 'YYYY-MM-DD'}
+            'synced_expiries': {}  # Legacy - kept for reference
+        }
+    
+    segment_config = config['segments']['fo_expired']
+    oldest_synced = segment_config.get('oldest_synced_expiry', {})
+    synced_expiries = segment_config.get('synced_expiries', {})
+    
+    total_candles = 0
+    total_new_expiries = 0
+    DB_URL = "postgresql://user:password@localhost:5432/keepgaining"
+    
+    # First, query database to find expiries we already have data for
+    # This prevents re-downloading data that's already in the DB
+    logger.info("Checking database for existing expired options data...")
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        # Query option_master for distinct expiry dates per underlying
+        existing_data = await conn.fetch('''
+            SELECT DISTINCT im.underlying, om.expiry_date::text
+            FROM option_master om
+            JOIN instrument_master im ON om.instrument_id = im.instrument_id
+            WHERE im.underlying IN ('NIFTY', 'BANKNIFTY', 'FINNIFTY', 'SENSEX', 'BANKEX')
+            AND om.expiry_date < CURRENT_DATE
+        ''')
+        
+        for row in existing_data:
+            underlying = row['underlying']
+            expiry_str = row['expiry_date']
+            if underlying not in synced_expiries:
+                synced_expiries[underlying] = []
+            if expiry_str not in synced_expiries[underlying]:
+                synced_expiries[underlying].append(expiry_str)
+        
+        # Save the discovered expiries
+        segment_config['synced_expiries'] = synced_expiries
+        save_config(config)
+        
+        total_existing = sum(len(v) for v in synced_expiries.values())
+        logger.info(f"    Found {total_existing} expiries already in database")
+    finally:
+        await conn.close()
+    
+    for underlying, inst_type, underlying_key in INDICES:
+        logger.info(f"\n>>> Processing {underlying}...")
+        
+        # Get available expiries from Upstox
+        all_expiries = await get_expired_expiries(token, inst_type, underlying_key)
+        logger.info(f"    Available: {len(all_expiries)} expiries")
+        
+        # Get already synced expiries for this underlying (now includes DB data)
+        already_synced = set(synced_expiries.get(underlying, []))
+        logger.info(f"    Already synced: {len(already_synced)} expiries")
+        
+        # Find new expiries to sync
+        new_expiries = [e for e in all_expiries if e not in already_synced]
+        logger.info(f"    New to sync: {len(new_expiries)} expiries")
+        
+        if not new_expiries:
+            logger.info(f"    [SKIP] All expiries already synced for {underlying}")
+            continue
+        
+        # Sort OLDEST FIRST - this ensures contiguous sync from past to present
+        # Once an expiry is synced, we can set oldest_synced_expiry and know
+        # everything before that date is complete
+        new_expiries = sorted(new_expiries, reverse=False)  # Oldest first
+        
+        for expiry in new_expiries:
+            logger.info(f"\n    Syncing {underlying} expiry {expiry}...")
+            
+            contracts = await get_expired_option_contracts(token, expiry, underlying_key, inst_type)
+            if not contracts:
+                logger.warning(f"    No contracts found for {expiry}")
+                # Still mark as synced (no data available)
+                if underlying not in synced_expiries:
+                    synced_expiries[underlying] = []
+                synced_expiries[underlying].append(expiry)
+                continue
+            
+            expiry_candles = 0
+            conn = await asyncpg.connect(DB_URL)
+            try:
+                for i, contract in enumerate(contracts):
+                    inst_id = await ensure_instrument(conn, contract, underlying)
+                    if not inst_id:
+                        continue
+                    
+                    # Calculate date range: 7 days before expiry to expiry
+                    from datetime import datetime, timedelta
+                    expiry_dt = datetime.strptime(expiry, '%Y-%m-%d').date()
+                    from_date = expiry_dt - timedelta(days=7)
+                    to_date = expiry_dt
+                    
+                    candles = await download_expired_candles(
+                        token, contract.get('instrument_key'), from_date, to_date
+                    )
+                    if candles:
+                        count = await save_candles_to_db(conn, inst_id, candles)
+                        expiry_candles += count
+                    
+                    # Progress indicator every 50 contracts
+                    if (i + 1) % 50 == 0:
+                        logger.info(f"      [{i+1}/{len(contracts)}] contracts processed...")
+            finally:
+                await conn.close()
+            
+            total_candles += expiry_candles
+            total_new_expiries += 1
+            
+            # Mark expiry as synced (legacy list)
+            if underlying not in synced_expiries:
+                synced_expiries[underlying] = []
+            synced_expiries[underlying].append(expiry)
+            
+            # Update oldest_synced_expiry - since we process oldest first,
+            # this is the contiguous sync boundary. Everything before this date is complete.
+            oldest_synced[underlying] = expiry
+            
+            logger.info(f"    Completed {underlying} {expiry}: {expiry_candles:,} candles")
+            logger.info(f"    >> Synced through: {expiry} (contiguous)")
+            
+            # Save config after each expiry to persist progress immediately
+            segment_config['synced_expiries'] = synced_expiries
+            segment_config['oldest_synced_expiry'] = oldest_synced
+            segment_config['last_sync'] = datetime.now().isoformat()
+            save_config(config)
+    
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Total: {total_new_expiries} new expiries synced, {total_candles:,} candles")
+    return total_candles
+
+
 # Segment sync function mapping
 SYNC_FUNCTIONS = {
     'equity': sync_equity,
@@ -244,6 +416,7 @@ SYNC_FUNCTIONS = {
     'indices_bse': sync_indices_bse,
     'fo_current': sync_fo_current,
     'fo_historical': sync_fo_historical,
+    'fo_expired': sync_fo_expired,
     'indicators': sync_indicators,
 }
 

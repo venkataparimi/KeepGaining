@@ -47,12 +47,17 @@ def get_upstox_token() -> str:
     return None
 
 
-async def get_expired_expiries(token: str, instrument_type: str = "OPTIDX") -> List[str]:
+async def get_expired_expiries(
+    token: str, 
+    instrument_type: str = "OPTIDX",
+    underlying_key: str = None
+) -> List[str]:
     """
     Get list of available expired expiry dates.
     
     Args:
         instrument_type: OPTIDX (index options), OPTSTK (stock options), FUTIDX, FUTSTK
+        underlying_key: e.g. NSE_INDEX|Nifty 50
     """
     headers = {
         'Accept': 'application/json',
@@ -60,23 +65,33 @@ async def get_expired_expiries(token: str, instrument_type: str = "OPTIDX") -> L
     }
     
     params = {'instrument_type': instrument_type}
+    if underlying_key:
+        params['instrument_key'] = underlying_key
     
     async with aiohttp.ClientSession() as session:
         async with session.get(EXPIRED_EXPIRIES_URL, headers=headers, params=params) as response:
             if response.status == 200:
                 data = await response.json()
-                expiries = data.get('data', {}).get('expiries', [])
+                expiries = data.get('data', []) # It returns a list directly or data.expiries?
+                # Upstox usually returns {status: ..., data: [list] or {expiries: [...]}}
+                # Let's handle both just in case, but usually data is the payload.
+                if isinstance(data.get('data'), dict) and 'expiries' in data['data']:
+                    expiries = data['data']['expiries']
+                elif isinstance(data.get('data'), list):
+                    expiries = data['data']
+                    
                 logger.info(f"Found {len(expiries)} expired expiries for {instrument_type}")
                 return expiries
             else:
-                logger.error(f"Failed to get expiries: {response.status}")
+                error_text = await response.text()
+                logger.error(f"Failed to get expiries: {response.status} - {error_text}")
                 return []
 
 
 async def get_expired_option_contracts(
     token: str,
     expiry_date: str,
-    underlying: str = "NIFTY",
+    underlying_key: str = "NSE_INDEX|Nifty 50",
     instrument_type: str = "OPTIDX"
 ) -> List[Dict]:
     """
@@ -84,7 +99,7 @@ async def get_expired_option_contracts(
     
     Args:
         expiry_date: Format YYYY-MM-DD
-        underlying: NIFTY, BANKNIFTY, etc.
+        underlying_key: The instrument key (e.g. NSE_INDEX|Nifty 50)
         instrument_type: OPTIDX or OPTSTK
     """
     headers = {
@@ -95,7 +110,7 @@ async def get_expired_option_contracts(
     params = {
         'instrument_type': instrument_type,
         'expiry_date': expiry_date,
-        'underlying': underlying
+        'instrument_key': underlying_key
     }
     
     async with aiohttp.ClientSession() as session:
@@ -103,7 +118,7 @@ async def get_expired_option_contracts(
             if response.status == 200:
                 data = await response.json()
                 contracts = data.get('data', [])
-                logger.info(f"Found {len(contracts)} contracts for {underlying} expiry {expiry_date}")
+                logger.info(f"Found {len(contracts)} contracts for {underlying_key} expiry {expiry_date}")
                 return contracts
             else:
                 error_text = await response.text()
@@ -218,6 +233,125 @@ async def save_candles_to_db(conn, instrument_id, candles: List[Dict], timeframe
         return 0
 
 
+async def ensure_instrument(conn, contract, underlying_symbol='NIFTY'):
+    """Ensure instrument exists in DB, creating it if necessary."""
+    trading_symbol = contract.get('trading_symbol')
+    instrument_key = contract.get('instrument_key')
+    
+    # Check if exists
+    inst_id = await conn.fetchval(
+        "SELECT instrument_id FROM instrument_master WHERE trading_symbol = $1",
+        trading_symbol
+    )
+    
+    if inst_id:
+        return inst_id
+        
+    # Create new instrument
+    logger.info(f"Creating new instrument: {trading_symbol}")
+    
+    # Parse fields
+    expiry_str = contract.get('expiry')
+    expiry = datetime.strptime(expiry_str, '%Y-%m-%d').date() if expiry_str else None
+    
+    # Default values from contract
+    instrument_type = contract.get('instrument_type', 'OPTIDX')
+    exchange = contract.get('exchange', 'NSE_FO')
+    if contract.get('strike_price'):
+        strike_price = float(contract.get('strike_price'))
+    else:
+        strike_price = None
+
+    if contract.get('lot_size'):
+        lot_size = int(contract.get('lot_size'))
+    else:
+        lot_size = None
+    
+    # Infer segment
+    segment = 'NSE_FO'
+    if 'BSE' in exchange:
+        segment = 'BSE_FO'
+    elif 'MCX' in exchange:
+        segment = 'MCX_FO'
+        
+    try:
+        # Get underlying instrument ID
+        # Map option underlying names to DB trading_symbol names
+        UNDERLYING_MAP = {
+            'NIFTY': 'NIFTY 50',
+            'BANKNIFTY': 'NIFTY BANK',
+            'FINNIFTY': 'NIFTY FIN SERVICE',
+            'MIDCPNIFTY': 'NIFTY MIDCAP 50',
+            'SENSEX': 'SENSEX',
+            'BANKEX': 'BANKEX',
+        }
+        
+        # Use mapped name if available, otherwise use as-is
+        db_symbol = UNDERLYING_MAP.get(underlying_symbol, underlying_symbol)
+        underlying_inst_id = await conn.fetchval(
+            "SELECT instrument_id FROM instrument_master WHERE trading_symbol = $1", 
+            db_symbol
+        )
+        
+        if not underlying_inst_id:
+            logger.warning(f"Underlying {underlying_symbol} (mapped to {db_symbol}) not found in DB")
+
+        # Create instrument_master record (with duplicate handling)
+        try:
+            inst_id = await conn.fetchval('''
+                INSERT INTO instrument_master (
+                    trading_symbol, exchange, instrument_type, underlying,
+                    segment, is_active
+                ) VALUES ($1, $2, $3, $4, $5, false)
+                RETURNING instrument_id
+            ''', trading_symbol, exchange, instrument_type, underlying_symbol, segment)
+        except Exception as insert_err:
+            # If insert fails, try to fetch existing
+            inst_id = await conn.fetchval(
+                "SELECT instrument_id FROM instrument_master WHERE trading_symbol = $1",
+                trading_symbol
+            )
+            if not inst_id:
+                raise insert_err
+
+        # Parse Option Details (PE/CE)
+        option_type = None
+        if 'PE' in trading_symbol:
+            option_type = 'PE'
+        elif 'CE' in trading_symbol:
+            option_type = 'CE'
+
+        # Insert into option_master if applicable
+        if inst_id and (instrument_type in ('OPTIDX', 'OPTSTK') or option_type):
+            # Use lot_size from contract or default to 1
+            option_lot_size = lot_size if lot_size else 1
+            # Check if option_master entry exists first
+            existing = await conn.fetchval(
+                'SELECT 1 FROM option_master WHERE instrument_id = $1',
+                inst_id
+            )
+            if not existing:
+                await conn.execute('''
+                    INSERT INTO option_master (
+                        instrument_id, strike_price, option_type, expiry_date,
+                        underlying_instrument_id, lot_size
+                    ) VALUES ($1, $2, $3, $4, $5, $6)
+                ''', inst_id, strike_price, option_type, expiry, underlying_inst_id, option_lot_size)
+    
+        # Insert into BrokerSymbolMapping
+        await conn.execute('''
+            INSERT INTO broker_symbol_mapping (
+                instrument_id, broker_name, broker_symbol, broker_token
+            ) VALUES ($1, 'upstox', $2, $3)
+            ON CONFLICT (broker_name, broker_symbol) DO NOTHING
+        ''', inst_id, instrument_key, instrument_key)
+        
+        return inst_id
+    except Exception as e:
+        logger.error(f"Failed to create instrument {trading_symbol}: {e}")
+        return None
+
+
 async def main():
     parser = argparse.ArgumentParser(description='Download expired F&O historical data')
     parser.add_argument('--expiry', help='Expiry date (YYYY-MM-DD), e.g., 2022-05-26')
@@ -232,9 +366,20 @@ async def main():
         logger.error("No Upstox token found. Please authenticate first.")
         return
     
+    # Map common symbols to underlying keys
+    UNDERLYING_MAP = {
+        'NIFTY': 'NSE_INDEX|Nifty 50',
+        'BANKNIFTY': 'NSE_INDEX|Nifty Bank',
+        'FINNIFTY': 'NSE_INDEX|Nifty Fin Service',
+        'SENSEX': 'BSE_INDEX|SENSEX',
+        'BANKEX': 'BSE_INDEX|BANKEX'
+    }
+    
+    underlying_key = UNDERLYING_MAP.get(args.underlying, args.underlying)
+    
     # List expiries if requested
     if args.list_expiries:
-        expiries = await get_expired_expiries(token, args.type)
+        expiries = await get_expired_expiries(token, args.type, underlying_key)
         print(f"\nAvailable expired expiries for {args.type}:")
         for exp in sorted(expiries, reverse=True)[:20]:  # Show last 20
             print(f"  {exp}")
@@ -246,14 +391,17 @@ async def main():
         return
     
     # Get contracts for the specified expiry
-    logger.info(f"Fetching contracts for {args.underlying} expiry {args.expiry}...")
-    contracts = await get_expired_option_contracts(token, args.expiry, args.underlying, args.type)
+    logger.info(f"Fetching contracts for {args.underlying} ({underlying_key}) expiry {args.expiry}...")
+    contracts = await get_expired_option_contracts(token, args.expiry, underlying_key, args.type)
     
     if not contracts:
         logger.error("No contracts found")
         return
     
     logger.info(f"Found {len(contracts)} contracts. Starting download...")
+    if contracts:
+        print(f"DEBUG: Sample contract keys: {list(contracts[0].keys())}")
+        print(f"DEBUG: Sample contract data: {contracts[0]}")
     
     # Connect to database
     conn = await asyncpg.connect(DB_URL)
@@ -270,14 +418,11 @@ async def main():
         instrument_key = contract.get('instrument_key')
         trading_symbol = contract.get('trading_symbol')
         
-        # Check if we have this instrument in our DB
-        inst_id = await conn.fetchval(
-            "SELECT instrument_id FROM instrument_master WHERE trading_symbol = $1",
-            trading_symbol
-        )
+        # Ensure instrument exists
+        inst_id = await ensure_instrument(conn, contract, args.underlying)
         
         if not inst_id:
-            logger.warning(f"[{i+1}/{len(contracts)}] {trading_symbol} not in database, skipping")
+            logger.warning(f"[{i+1}/{len(contracts)}] Failed to get/create {trading_symbol}, skipping")
             continue
         
         # Download candles

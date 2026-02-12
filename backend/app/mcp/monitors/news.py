@@ -197,13 +197,79 @@ class NewsMonitor(BaseMonitor):
         
         logger.debug(f"NewsMonitor: Scraping {source}")
         
-        # MCP Integration:
-        # 1. mcp_chrome-devtools_navigate_page to news source
-        # 2. mcp_chrome-devtools_take_snapshot to get page content
-        # 3. Parse headlines and extract news items
-        
-        # Placeholder until MCP integration
-        return []
+        try:
+            # We'll implementation extraction for MoneyControl as the primary example
+            # Other sources would follow similar patterns with different selectors
+            if source == "moneycontrol":
+                return await self._scrape_moneycontrol(url)
+            elif source == "economic_times":
+                # Placeholder for ET implementation
+                return []
+            else:
+                return []
+        except Exception as e:
+            logger.error(f"NewsMonitor: Scrape failed for {source}: {e}")
+            return []
+            
+    async def _scrape_moneycontrol(self, url: str) -> List[NewsItem]:
+        """Specific scraper for MoneyControl Markets News."""
+        items = []
+        try:
+            from playwright.async_api import async_playwright
+            
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+                
+                # Block images/css for speed
+                await page.route("**/*.{png,jpg,jpeg,svg,css,woff,woff2}", lambda route: route.abort())
+                
+                await page.goto(url, timeout=30000)
+                
+                # MoneyControl news list items
+                # Usually li.clearfix inside #cagetory (sic) or .clearfix
+                articles = await page.locator("li.clearfix, .news-list li").all()
+                
+                for article in articles[:15]:  # Limit to top 15
+                    try:
+                        # Title and Link
+                        link_el = article.locator("h2 a, h3 a").first
+                        if await link_el.count() == 0:
+                            continue
+                            
+                        title = await link_el.inner_text()
+                        link = await link_el.get_attribute("href")
+                        
+                        # Timestamp (often text like "2 mins ago" or spans)
+                        # MC uses span found inside the text or date class
+                        time_text = ""
+                        date_el = article.locator("span").first
+                        if await date_el.count() > 0:
+                            time_text = await date_el.inner_text()
+                        
+                        # Description/Summary
+                        summary = ""
+                        p_el = article.locator("p")
+                        if await p_el.count() > 0:
+                            summary = await p_el.inner_text()
+                            
+                        if title and link:
+                            items.append(NewsItem(
+                                title=title.strip(),
+                                source="MoneyControl",
+                                url=link,
+                                timestamp=datetime.now(), # Approximation, parsing relative time is complex
+                                summary=summary.strip()
+                            ))
+                    except Exception as e:
+                        continue
+                
+                await browser.close()
+                
+        except Exception as e:
+            logger.error(f"NewsMonitor: MoneyControl scrape error: {e}")
+            
+        return items
     
     def _filter_new_items(self, items: List[NewsItem]) -> List[NewsItem]:
         """Filter to only new items not seen before."""

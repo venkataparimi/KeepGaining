@@ -133,3 +133,10 @@ dump.rdb
 # Backup files
 *.bak
 *.backup
+
+# Script outputs
+market_analysis_latest.json
+trendlyne_api_dump.json
+sync_run*.txt
+stage*_run.txt
+indicator_run.txt
