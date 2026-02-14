@@ -694,7 +694,15 @@ async def run_backfill(mode: str, dry_run: bool = False, limit: int = 0) -> Dict
         return {'error': 'No token'}
     
     pool = await get_db_pool()
-    today = date.today()
+    
+    # Refresh materialized view to ensure we have latest data dates
+    if not dry_run:
+        logger.info("Refreshing candle_data_summary materialized view...")
+        async with pool.acquire() as conn:
+            await conn.execute("REFRESH MATERIALIZED VIEW candle_data_summary")
+        logger.info("View refreshed.")
+
+    today = date.today() + timedelta(days=1)
     
     result = {
         'mode': mode,

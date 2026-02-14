@@ -140,3 +140,8 @@ trendlyne_api_dump.json
 sync_run*.txt
 stage*_run.txt
 indicator_run.txt
+backend/scripts/temp/
+backend/*.txt
+
+# Generated data files (progress, status)
+backend/scripts/data/*.json

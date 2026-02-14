@@ -27,7 +27,7 @@ if %errorlevel% neq 0 (
 REM 2. Run Data Sync (Equity + Indices + F&O + Indicators)
 echo [2/4] Running Daily Sync... >> %LOG_FILE%
 echo Running: python scripts/daily_sync.py --segment all >> %LOG_FILE%
-python scripts/daily_sync.py --segment all >> %LOG_FILE% 2>&1
+python scripts/daily_sync.py >> %LOG_FILE% 2>&1
 
 if %errorlevel% neq 0 (
     echo ERROR: Daily sync failed! Check logs. >> %LOG_FILE%
