@@ -112,6 +112,7 @@ interface SectorPerf {
     total_trades: number;
     win_rate: number;
     total_pnl_pct: number;
+    [key: string]: any;
 }
 
 interface SymbolPerf {
@@ -728,7 +729,7 @@ export default function StrategyTradesExplorer() {
                                         innerRadius={60}
                                         outerRadius={100}
                                         paddingAngle={2}
-                                        label={({ sector, win_rate }) => `${sector}: ${win_rate}%`}
+                                        label={({ sector, win_rate }: any) => `${sector}: ${win_rate}%`}
                                         labelLine={{ stroke: '#64748b' }}
                                     >
                                         {sectorData.map((_, index) => (

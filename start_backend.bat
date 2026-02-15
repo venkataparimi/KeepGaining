@@ -12,6 +12,6 @@ echo Note: Database connection errors are expected if PostgreSQL is not running.
 echo The API will still work for most endpoints.
 echo.
 
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 
 pause

@@ -101,6 +101,8 @@ class InstrumentMaster(Base):
     lot_size: Mapped[int] = mapped_column(Integer, default=1)
     tick_size: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     is_tradeable: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    
+    __table_args__ = {'extend_existing': True}
     is_fo_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     isin: Mapped[Optional[str]] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

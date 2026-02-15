@@ -321,6 +321,17 @@ class InstrumentSyncService:
                 # Extract underlying from name for F&O
                 underlying = data.get("name", "").split()[0]
             
+            strike = data.get("strike")
+            if strike is not None:
+                try:
+                    s_float = float(strike)
+                    if s_float % 1 == 0:
+                        strike = int(s_float)
+                    else:
+                        strike = s_float
+                except:
+                    pass
+
             return UpstoxInstrument(
                 instrument_key=data.get("instrument_key", ""),
                 exchange=data.get("exchange", "NSE"),
@@ -334,7 +345,7 @@ class InstrumentSyncService:
                 tick_size=float(data.get("tick_size", 0.05)),
                 freeze_quantity=data.get("freeze_quantity"),
                 expiry=expiry,
-                strike_price=data.get("strike"),
+                strike_price=strike,
                 option_type=data.get("option_type"),
                 underlying_symbol=underlying,
                 short_name=data.get("short_name"),

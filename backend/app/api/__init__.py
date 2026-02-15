@@ -5,7 +5,8 @@ from app.api.routes import (
     strategy_management, backtest, deployment, trading_mode, 
     broker_management, upstox, calendar, data, trading_execution, websocket,
     dashboard, settings, alerts, trade_chart, trade_analytics, live_trading,
-    futures, audit, cache, advanced_analytics, multi_broker, strategy_trades
+    futures, audit, cache, advanced_analytics, multi_broker, strategy_trades,
+    historical_data, master_data
 )
 from app.api import comet
 
@@ -30,6 +31,9 @@ api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
 api_router.include_router(trade_chart.router, prefix="/trade-chart", tags=["trade-chart"])
 api_router.include_router(trade_analytics.router, prefix="/trades", tags=["trade-analytics"])
 api_router.include_router(data.router, prefix="/data", tags=["data"])
+api_router.include_router(historical_data.router, prefix="/historical-data", tags=["historical-data"])
+api_router.include_router(master_data.router, prefix="/master", tags=["master-data"])
+
 # New trading execution API with paper/live trading orchestrator
 api_router.include_router(trading_execution.router, tags=["trading-execution"])
 # Real-time WebSocket streaming API

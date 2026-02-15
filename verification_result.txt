@@ -1,0 +1,4 @@
+Status Code: 200
+Received 5 candles
+First candle: {'time': 1770595200, 'open': 25888.7, 'high': 25922.25, 'low': 25780.9, 'close': 25863.3, 'volume': 0.0}
+Last candle: {'time': 1770940800, 'open': 25571.15, 'high': 25630.35, 'low': 25444.3, 'close': 25460.55, 'volume': 0.0}

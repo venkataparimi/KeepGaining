@@ -17,6 +17,7 @@ const navigation = [
     { name: "Strategy Trades", href: "/strategy-trades", icon: PieChart },
     { name: "Advanced Analytics", href: "/advanced-analytics", icon: Brain },
     { name: "Market", href: "/market", icon: LineChart },
+    { name: "Charts", href: "/chart", icon: BarChart3 },
     { name: "Brokers", href: "/brokers", icon: Building2 },
     { name: "Comet", href: "/comet", icon: Radio },
     { name: "Settings", href: "/settings", icon: Settings },
