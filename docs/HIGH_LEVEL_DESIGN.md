@@ -250,7 +250,7 @@ Broker Gateway ─────► FILL Event ───┬──► Position Mana
                                    ├──► OMS (ack)
                                    └──► Storage Service
 
-Position Manager ───► POS_UPDATE ───┬──► Dashboard
+Position Manager ───► POS_UPDATE ───┬──► Dashboard (with Dynamic TS Charts)
                                    ├──► Telegram
                                    └──► Storage Service
 
@@ -2336,9 +2336,36 @@ MOBILE VIEW (< 768px):
 | **Logging** | Structured JSON logs |
 | **Monitoring** | Health endpoints, metrics |
 
+## 16. MCP Automation Extension
+
+### 16.1 Browser Automation Core
+System utilizes Playwright and DevTools connected via MCP protocols to run headless browsers.
+
+#### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    MCP AUTOMATION EXTENSION                  │
+├──────────────────────────────────────────────────────────────┤
+│  ┌────────────┐    ┌────────────┐    ┌────────────┐          │
+│  │ Broker     │───▶│ Screener   │───▶│ Sentiment  │          │
+│  │ Login Auth │    │ Evaluator  │    │ NLP Agg    │          │
+│  └────────────┘    └────────────┘    └────────────┘          │
+│        │                 │                 │                 │
+│        ▼                 ▼                 ▼                 │
+│  • Headless TOTP   • Chartink HTML   • Trendlyne NLP         │
+│  • Persisted Auth  • Web Scrape      • DOM Extract           │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### Event Handling & Capabilities
+- **DevTools Protocol**: Directly maps component IDs on complex websites for automated navigation.
+- **Playwright Profiles**: Runs cached sessions mimicking human latency/timing intervals.
+- **Auto-Login**: Automated retrieval of OAuth tokens behind multi-factor authentication, solving daily connection resets without user intervention.
+
 ---
 
-## 15. Appendices
+## 17. Appendices
 
 ### Appendix A: Event Schema Reference
 

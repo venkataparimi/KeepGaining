@@ -38,6 +38,9 @@ def load_strategy(strategy_name: str):
         "EMAScalping": "app.strategies.ema_scalping.EMAScalpingStrategy", 
         "SectorMomentum": "app.strategies.sector_momentum.SectorMomentumStrategy",
         "IndicatorStrategy": "app.strategies.indicator_strategies.VolumeRocketStrategy",
+        "ShortStraddle": "app.strategies.straddle.ShortStraddleStrategy",
+        "EMAOptionBuying": "app.strategies.ema_option_buyer.EMAOptionBuyingStrategy",
+        "EMOS": "app.strategies.emos_strategy.EMOSStrategy",
     }
     
     if strategy_name not in strategies:
@@ -427,6 +430,9 @@ def list_strategies():
         "EMAScalping": "9/15 EMA crossover with 30° slope filter",
         "SectorMomentum": "Morning sector ranking and stock selection",
         "IndicatorStrategy": "VWMA + Supertrend + RSI confirmation",
+        "ShortStraddle": "Short Straddle options selling strategy",
+        "EMAOptionBuying": "EMA based option buying strategy",
+        "EMOS": "Enhanced Momentum Option Scalper strategy",
     }
     
     click.echo("\nAvailable Strategies:")

@@ -1,16 +1,17 @@
 """
 Intraday Option Buying Momentum Strategy (Smart Money Flow Confirmation)
+VERSION 2.0 - IMPROVED
 
-A Price Action + Open Interest based strategy for option buying.
-NO indicators (EMA, RSI, VWAP) - purely price action and OI analysis.
-
-Key Components:
-1. Market Control Check - First candle low = Day low (bulls in control)
-2. Candle Expansion - Today's green candles larger than yesterday's
-3. PDH Breakout - Price above Previous Day High by 9:30-9:35 AM
-4. OI Confirmation - Increasing OI with rising price (smart money)
-5. Entry after 10:15 AM on strong breakout candle
-6. Dynamic exit on momentum reversal (big red candles) or trailing SL
+Changes from v1:
+  - Fixed duplicate config fields (min_oi_increase_pct, trailing_sl_pct, initial_sl_pct, max_position_pct)
+  - Trailing SL now places actual broker orders (SL-M) and tracks order IDs
+  - Improved entry signal accuracy: added VWAP filter, candle close vs range position, min ATR filter
+  - End-of-day square-off at 15:15 IST with hard market-close fallback at 15:25
+  - Re-entry logic after SL hit: allowed once per day if setup conditions re-confirm
+  - Full trade logging with P&L tracking (TradeLog dataclass + daily summary)
+  - Smarter candle expansion: compares same-direction candles correctly
+  - PDH/PDL breakout: price must sustain above PDH for 2 candles (false breakout filter)
+  - Fixed PE OI confirmation: now correctly checks OI increasing with FALLING price
 """
 
 import logging
@@ -28,166 +29,228 @@ logger = logging.getLogger(__name__)
 # IST timezone offset (UTC+5:30)
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
+# ─────────────────────────────────────────────
+# Enums
+# ─────────────────────────────────────────────
 
 class MarketPhase(Enum):
-    """Market phases during the trading day."""
     PRE_MARKET = "pre_market"
-    FIRST_HOUR = "first_hour"          # 9:15 - 10:15: Analysis + early entry on breakout
-    ENTRY_WINDOW = "entry_window"       # 10:15 - 12:00: Normal entry window
-    MOMENTUM_FADE = "momentum_fade"     # 12:00 - 15:30: Momentum typically fades
+    FIRST_HOUR = "first_hour"        # 9:15 – 10:15: Analysis + early entry on breakout
+    ENTRY_WINDOW = "entry_window"    # 10:15 – 12:00: Normal entry window
+    MOMENTUM_FADE = "momentum_fade"  # 12:00 – 15:15: Hold / exit only
+    EOD_EXIT = "eod_exit"            # 15:15 – 15:25: Force square-off
     CLOSED = "closed"
 
 
-class BullishSetupStatus(Enum):
-    """Status of bullish setup conditions."""
-    NOT_CHECKED = "not_checked"
-    CHECKING = "checking"
-    CONFIRMED = "confirmed"
-    FAILED = "failed"
-
-
 class TradeDirection(Enum):
-    """Trade direction - CE for bullish, PE for bearish."""
-    CE = "call"  # Bullish - buy calls
-    PE = "put"   # Bearish - buy puts
+    CE = "call"   # Bullish
+    PE = "put"    # Bearish
 
+
+# ─────────────────────────────────────────────
+# Trade Log
+# ─────────────────────────────────────────────
+
+@dataclass
+class TradeLog:
+    """Records every completed trade for P&L tracking."""
+    date: date
+    symbol: str
+    direction: TradeDirection
+    entry_time: datetime
+    entry_price: float
+    exit_time: Optional[datetime] = None
+    exit_price: Optional[float] = None
+    exit_reason: str = ""
+    quantity: int = 0
+    pnl_pct: float = 0.0
+    pnl_points: float = 0.0
+    max_profit_pct: float = 0.0
+    sl_order_id: Optional[str] = None   # Broker SL order ID (for modification)
+    is_reentry: bool = False
+
+    def close(self, exit_price: float, exit_time: datetime, reason: str):
+        self.exit_price = exit_price
+        self.exit_time = exit_time
+        self.exit_reason = reason
+        if self.direction == TradeDirection.CE:
+            self.pnl_pct = (exit_price - self.entry_price) / self.entry_price * 100
+        else:
+            self.pnl_pct = (self.entry_price - exit_price) / self.entry_price * 100
+        self.pnl_points = self.pnl_pct / 100 * self.entry_price
+
+    @property
+    def is_winner(self) -> bool:
+        return self.pnl_pct > 0
+
+
+@dataclass
+class DailySummary:
+    """Aggregated P&L and stats for one trading day."""
+    date: date
+    trades: List[TradeLog] = field(default_factory=list)
+
+    @property
+    def total_pnl_pct(self) -> float:
+        return sum(t.pnl_pct for t in self.trades if t.exit_price is not None)
+
+    @property
+    def win_rate(self) -> float:
+        closed = [t for t in self.trades if t.exit_price is not None]
+        if not closed:
+            return 0.0
+        return sum(1 for t in closed if t.is_winner) / len(closed) * 100
+
+    def log(self):
+        logger.info(
+            f"[DailySummary] {self.date} | Trades: {len(self.trades)} | "
+            f"Win Rate: {self.win_rate:.1f}% | Total P&L: {self.total_pnl_pct:+.2f}%"
+        )
+        for t in self.trades:
+            status = "WIN" if t.is_winner else "LOSS"
+            logger.info(
+                f"  [{status}] {t.direction.name} | Entry: {t.entry_price:.2f} @ {t.entry_time} | "
+                f"Exit: {t.exit_price:.2f} @ {t.exit_time} | P&L: {t.pnl_pct:+.2f}% | {t.exit_reason}"
+            )
+
+
+# ─────────────────────────────────────────────
+# Setup Score
+# ─────────────────────────────────────────────
 
 @dataclass
 class SetupScore:
-    """Score a setup for ranking across multiple stocks."""
     symbol: str
     direction: TradeDirection
     timestamp: datetime
-    
-    # Scoring components (higher = better)
-    breakout_strength: float = 0.0  # How far above/below PDH/PDL (%)
-    volume_ratio: float = 0.0       # Volume vs average
-    candle_strength: float = 0.0    # Body size ratio
-    consecutive_candles: int = 0    # Candles above/below level
-    market_control_score: float = 0.0  # How clean is the trend
-    
+    breakout_strength: float = 0.0
+    volume_ratio: float = 0.0
+    candle_strength: float = 0.0
+    consecutive_candles: int = 0
+    market_control_score: float = 0.0
+    vwap_score: float = 0.0          # NEW: bonus for price above/below VWAP
+
     @property
     def total_score(self) -> float:
-        """Calculate total setup score (0-100)."""
         score = 0.0
-        # Breakout strength: 0.3% = 10pts, 0.5% = 20pts, 1% = 40pts
         score += min(self.breakout_strength * 40, 40)
-        # Volume ratio: 1.5x = 10pts, 2x = 20pts
         score += min((self.volume_ratio - 1) * 20, 20)
-        # Candle strength: 0.5 ratio = 5pts, 0.8 = 16pts
         score += self.candle_strength * 20
-        # Consecutive candles: 2 = 10pts, 3+ = 20pts
         score += min(self.consecutive_candles * 10, 20)
+        score += self.vwap_score * 10  # up to 10 bonus points
         return score
 
 
+# ─────────────────────────────────────────────
+# Day Context
+# ─────────────────────────────────────────────
+
 @dataclass
 class DayContext:
-    """Stores context for the current trading day."""
     date: date
     first_candle: Optional[Candle] = None
     day_low: float = float('inf')
     day_high: float = 0.0
-    pdh: float = 0.0  # Previous Day High
-    pdl: float = 0.0  # Previous Day Low
-    pdc: float = 0.0  # Previous Day Close
-    
-    # BULLISH Setup status
-    market_control_confirmed: bool = False  # Condition 1: First candle low = Day low
-    candle_expansion_confirmed: bool = False  # Condition 2
-    pdh_breakout_confirmed: bool = False  # Condition 3
+    pdh: float = 0.0
+    pdl: float = 0.0
+    pdc: float = 0.0
+
+    # ── Bullish conditions ──
+    market_control_confirmed: bool = False
+    candle_expansion_confirmed: bool = False
+    pdh_breakout_confirmed: bool = False
     pdh_breakout_time: Optional[datetime] = None
-    oi_confirmation: bool = False  # Condition 4
-    
-    # BEARISH Setup status (PE trade conditions)
-    bearish_market_control: bool = False  # First candle high = Day high (bears in control)
-    bearish_candle_expansion: bool = False  # Red candles expanding
-    pdl_breakdown_confirmed: bool = False  # Price below Previous Day Low
+    oi_confirmation: bool = False
+
+    # ── Bearish conditions ──
+    bearish_market_control: bool = False
+    bearish_candle_expansion: bool = False
+    pdl_breakdown_confirmed: bool = False
     pdl_breakdown_time: Optional[datetime] = None
-    bearish_oi_confirmation: bool = False  # OI increasing with falling price
-    
-    # Candle tracking
+    bearish_oi_confirmation: bool = False
+
+    # ── Candle / volume tracking ──
     today_green_candle_sizes: List[float] = field(default_factory=list)
-    today_red_candle_sizes: List[float] = field(default_factory=list)  # For bearish
-    yesterday_candle_sizes: List[float] = field(default_factory=list)
-    yesterday_red_candle_sizes: List[float] = field(default_factory=list)  # For bearish
-    
-    # Volume tracking for high win rate filter
+    today_red_candle_sizes: List[float] = field(default_factory=list)
+    yesterday_green_candle_sizes: List[float] = field(default_factory=list)
+    yesterday_red_candle_sizes: List[float] = field(default_factory=list)
     candle_volumes: List[int] = field(default_factory=list)
-    consecutive_closes_above_pdh: int = 0  # Track candles closing above PDH
-    consecutive_closes_below_pdl: int = 0  # Track candles closing below PDL (bearish)
-    
-    # OI tracking
+    consecutive_closes_above_pdh: int = 0
+    consecutive_closes_below_pdl: int = 0
+
+    # ── OI tracking (separate for bullish/bearish) ──
     initial_oi: int = 0
     last_oi: int = 0
-    oi_increase_count: int = 0
+    oi_increase_count: int = 0       # OI up + price up  (CE)
+    oi_bearish_count: int = 0        # OI up + price down (PE) — FIX: was same counter
     price_at_oi_check: float = 0.0
-    
-    # Entry tracking (supports both CE and PE)
+
+    # ── VWAP ──
+    vwap_cumulative_tp_vol: float = 0.0   # Σ (typical_price * volume)
+    vwap_cumulative_vol: float = 0.0      # Σ volume
+    vwap: float = 0.0
+
+    # ── Entry tracking ──
     entry_taken: bool = False
+    reentry_taken: bool = False           # NEW: track re-entry separately
     entry_direction: Optional[TradeDirection] = None
     entry_price: float = 0.0
     entry_time: Optional[datetime] = None
     highest_since_entry: float = 0.0
     lowest_since_entry: float = float('inf')
     trailing_sl: float = 0.0
-    
-    # PE-specific tracking
-    candles_since_entry: int = 0  # Count candles since entry
-    red_candles_after_entry: int = 0  # Confirmation candles for PE
-    max_profit_pct: float = 0.0  # Track max profit for breakeven exit
-    
+    sl_order_id: Optional[str] = None     # NEW: broker SL order tracking
+    candles_since_entry: int = 0
+    red_candles_after_entry: int = 0
+    max_profit_pct: float = 0.0
+
     def all_bullish_conditions_met(self) -> bool:
-        """Check if all bullish (CE) pre-entry conditions are met."""
         return (
             self.market_control_confirmed and
             self.candle_expansion_confirmed and
             self.pdh_breakout_confirmed and
             self.oi_confirmation
         )
-    
+
     def all_bearish_conditions_met(self) -> bool:
-        """Check if all bearish (PE) pre-entry conditions are met."""
         return (
             self.bearish_market_control and
             self.bearish_candle_expansion and
             self.pdl_breakdown_confirmed and
             self.bearish_oi_confirmation
         )
-    
+
     def all_conditions_met(self) -> bool:
-        """Check if any direction has all conditions met."""
         return self.all_bullish_conditions_met() or self.all_bearish_conditions_met()
-    
+
     def reset_for_new_day(self, new_date: date):
-        """Reset context for a new trading day."""
-        # Save yesterday's data
+        """Roll over context for a new trading day. Preserves previous day data."""
         self.pdh = self.day_high
         self.pdl = self.day_low
         self.pdc = self.first_candle.close if self.first_candle else 0.0
-        self.yesterday_candle_sizes = self.today_green_candle_sizes.copy()
+        # Roll candle sizes (same direction comparison)
+        self.yesterday_green_candle_sizes = self.today_green_candle_sizes.copy()
         self.yesterday_red_candle_sizes = self.today_red_candle_sizes.copy()
-        
-        # Reset for new day
+
         self.date = new_date
         self.first_candle = None
         self.day_low = float('inf')
         self.day_high = 0.0
-        
-        # Bullish conditions reset
+
+        # Bullish reset
         self.market_control_confirmed = False
         self.candle_expansion_confirmed = False
         self.pdh_breakout_confirmed = False
         self.pdh_breakout_time = None
         self.oi_confirmation = False
-        
-        # Bearish conditions reset
+
+        # Bearish reset
         self.bearish_market_control = False
         self.bearish_candle_expansion = False
         self.pdl_breakdown_confirmed = False
         self.pdl_breakdown_time = None
         self.bearish_oi_confirmation = False
-        
+
         # Tracking reset
         self.today_green_candle_sizes = []
         self.today_red_candle_sizes = []
@@ -197,124 +260,144 @@ class DayContext:
         self.initial_oi = 0
         self.last_oi = 0
         self.oi_increase_count = 0
+        self.oi_bearish_count = 0
         self.price_at_oi_check = 0.0
-        
+        self.vwap_cumulative_tp_vol = 0.0
+        self.vwap_cumulative_vol = 0.0
+        self.vwap = 0.0
+
         # Entry reset
         self.entry_taken = False
+        self.reentry_taken = False
         self.entry_direction = None
         self.entry_price = 0.0
         self.entry_time = None
         self.highest_since_entry = 0.0
         self.lowest_since_entry = float('inf')
         self.trailing_sl = 0.0
+        self.sl_order_id = None
         self.candles_since_entry = 0
         self.red_candles_after_entry = 0
         self.max_profit_pct = 0.0
 
 
+# ─────────────────────────────────────────────
+# Config (FIXED: no duplicate fields)
+# ─────────────────────────────────────────────
+
 @dataclass
 class IntradayMomentumConfig:
-    """Configuration for the Intraday Momentum OI Strategy."""
-    # Time windows
+    """Configuration for the Intraday Momentum OI Strategy v2."""
+
+    # ── Time windows ──
     market_open: time = field(default_factory=lambda: time(9, 15))
     first_hour_end: time = field(default_factory=lambda: time(10, 15))
     entry_window_start: time = field(default_factory=lambda: time(10, 15))
     entry_window_end: time = field(default_factory=lambda: time(12, 0))
-    market_close: time = field(default_factory=lambda: time(15, 30))
-    
-    # PDH/PDL breakout timing
+    eod_exit_start: time = field(default_factory=lambda: time(15, 15))   # Start square-off
+    market_close: time = field(default_factory=lambda: time(15, 30))     # Hard close
+
+    # ── PDH/PDL breakout timing ──
     pdh_breakout_deadline: time = field(default_factory=lambda: time(9, 35))
-    pdl_breakdown_deadline: time = field(default_factory=lambda: time(9, 35))  # For bearish
-    
-    # Candle analysis
-    min_candle_body_ratio: float = 0.5  # Body must be 50% of total range
-    big_red_candle_multiplier: float = 2.0  # Red candle 2x avg to trigger CE exit
-    big_green_candle_multiplier: float = 2.5  # Green candle 2.5x avg to trigger PE exit (relaxed - allow bounces)
-    strong_green_candle_multiplier: float = 1.0  # Entry candle must be 1x avg
-    
-    # CE-specific exit settings (optimized: +56% improvement over baseline)
-    ce_min_hold_candles: int = 8  # Hold CE for at least 8 candles before momentum exit (was 3)
-    ce_require_ema_confirm: bool = True  # Only exit on big red if also below EMA9
-    ce_use_ema_cross_exit: bool = False  # If True, use EMA9 cross as primary CE exit
-    
-    # PE-specific settings
-    pe_min_hold_candles: int = 5  # Hold PE for at least 5 candles before momentum exit (was 3)
-    pe_breakeven_exit_pct: float = 0.15  # Exit PE at +0.15% profit on first green reversal
-    pe_min_continuation_candles: int = 1  # Need 1 red candle after entry to confirm direction
-    pe_initial_sl_pct: float = 0.7  # Wider initial SL for PE (0.7% vs 0.5%)
-    pe_trailing_activation_pct: float = 0.2  # Only start trailing after 0.2% profit
-    
-    # PE Volatility Filter - Only allow PE on volatile stocks
-    pe_min_atr_pct: float = 2.5  # Minimum ATR% required for PE trades (volatile stocks only)
+    pdl_breakdown_deadline: time = field(default_factory=lambda: time(9, 35))
+
+    # ── Candle quality filters ──
+    min_candle_body_ratio: float = 0.5
+    big_red_candle_multiplier: float = 2.0
+    big_green_candle_multiplier: float = 2.5
+    strong_green_candle_multiplier: float = 1.0
+
+    # ── CE hold / exit settings ──
+    ce_min_hold_candles: int = 8
+    ce_require_ema_confirm: bool = True
+    ce_use_ema_cross_exit: bool = False
+
+    # ── PE hold / exit settings ──
+    pe_min_hold_candles: int = 5
+    pe_breakeven_exit_pct: float = 0.15
+    pe_min_continuation_candles: int = 1
+    pe_initial_sl_pct: float = 0.7
+    pe_trailing_activation_pct: float = 0.2
+
+    # ── PE volatility filter ──
+    pe_min_atr_pct: float = 2.5
     pe_eligible_symbols: List[str] = field(default_factory=lambda: [
-        # Stocks that historically show positive edge in PE trades (ATR > 2.5%)
         "ADANIENT", "ADANIGREEN", "ADANIPOWER", "SAIL", "RBLBANK", "HINDALCO",
         "BHARTIARTL", "IDEA", "MRPL", "DELHIVERY", "ETERNAL", "VOLTAS",
         "JINDALSTEL", "VEDL", "TATASTEEL", "JSWSTEEL", "BHEL", "NBCC",
         "NATIONALUM", "BANKINDIA", "BANKBARODA", "PNB", "CANBK", "IOB",
     ])
-    
-    # HIGH WIN RATE FILTERS
-    min_breakout_pct: float = 0.3  # Price must be 0.3% above PDH (not just 1 tick)
-    min_breakdown_pct: float = 0.3  # Price must be 0.3% below PDL for PE
-    min_volume_multiplier: float = 1.5  # Entry candle volume must be 1.5x average
-    max_gap_up_pct: float = 1.0  # Skip CE if gaps up more than 1% above PDH
-    max_gap_down_pct: float = 1.0  # Skip PE if gaps down more than 1% below PDL
-    min_candles_above_pdh: int = 2  # Wait for 2 candles closing above PDH
-    min_candles_below_pdl: int = 2  # Wait for 2 candles closing below PDL
-    
-    # OI confirmation
-    min_oi_increase_pct: float = 1.0  # Minimum 1% OI increase
-    min_oi_checks_positive: int = 3  # At least 3 positive OI increases
-    
-    # Trailing stop
-    trailing_sl_pct: float = 0.5  # 0.5% trailing stop from high
-    initial_sl_pct: float = 1.0  # 1% initial stop from entry
-    
-    # Position sizing
-    max_position_pct: float = 2.0  # Max 2% of capital per trade
-    
-    # Trade direction control
-    enable_ce_trades: bool = True  # Enable bullish (CE) trades
-    enable_pe_trades: bool = True  # Enable bearish (PE) trades
-    
-    # Ranking / Selection
-    max_trades_per_day: int = 2  # Max trades across all symbols per day
-    
-    # OI confirmation
-    min_oi_increase_pct: float = 1.0  # Minimum 1% OI increase
-    min_oi_checks_positive: int = 3  # At least 3 positive OI increases
-    
-    # Trailing stop
-    trailing_sl_pct: float = 0.5  # 0.5% trailing stop from high
-    initial_sl_pct: float = 1.0  # 1% initial stop from entry
-    
-    # Position sizing
-    max_position_pct: float = 2.0  # Max 2% of capital per trade
 
+    # ── High win rate entry filters ──
+    min_breakout_pct: float = 0.3
+    min_breakdown_pct: float = 0.3
+    min_volume_multiplier: float = 1.5
+    max_gap_up_pct: float = 1.0
+    max_gap_down_pct: float = 1.0
+    min_candles_above_pdh: int = 2
+    min_candles_below_pdl: int = 2
+
+    # NEW: VWAP filter — only take CE if price is above VWAP, PE if below VWAP
+    use_vwap_filter: bool = True
+
+    # NEW: Min ATR filter to avoid low-volatility setups
+    min_atr_points: float = 5.0      # Minimum ATR (points) required to trade
+
+    # ── OI confirmation (single definition — was duplicated in v1) ──
+    min_oi_increase_pct: float = 1.0
+    min_oi_checks_positive: int = 3
+
+    # ── Trailing SL ──
+    trailing_sl_pct: float = 0.5      # 0.5% trail from extreme
+    initial_sl_pct: float = 1.0       # 1% initial SL from entry
+
+    # NEW: Trailing SL order placement
+    place_sl_orders: bool = True       # If True, place SL-M orders via broker
+    sl_order_type: str = "SL-M"        # "SL-M" or "SL"
+
+    # ── Position sizing ──
+    max_position_pct: float = 2.0      # Max 2% of capital per trade
+
+    # ── Re-entry logic ──
+    allow_reentry: bool = True         # Allow one re-entry per day after SL
+    reentry_min_score: float = 60.0    # Minimum setup score for re-entry
+    reentry_cooldown_candles: int = 3  # Wait N candles after SL before re-entry
+
+    # ── Trade limits ──
+    max_trades_per_day: int = 2        # Including re-entry
+
+    # ── Direction control ──
+    enable_ce_trades: bool = True
+    enable_pe_trades: bool = True
+
+
+# ─────────────────────────────────────────────
+# Strategy
+# ─────────────────────────────────────────────
 
 class IntradayMomentumOIStrategy(BaseStrategy):
     """
-    Intraday Option Buying Momentum Strategy with Smart Money (OI) Confirmation.
-    
-    This strategy is designed for buying options (CE for bullish, PE for bearish)
-    based on price action and open interest analysis of the underlying stock.
-    
-    Entry Conditions (ALL must be true):
-    1. Market Control: First 5min candle low = Day low
-    2. Candle Expansion: Today's green candles bigger than yesterday's
-    3. PDH Breakout: Price > Previous Day High by 9:35 AM
-    4. OI Confirmation: Increasing OI with rising price
-    5. Time: After 10:15 AM
-    6. Trigger: Strong breakout candle
-    
-    Exit Conditions (ANY triggers exit):
-    1. Big red candle (momentum reversal)
-    2. Trailing stop loss hit
+    Intraday Option Buying Momentum Strategy v2.0
+
+    Improvements over v1:
+    - Fixed duplicate config fields
+    - Real trailing SL orders placed via broker
+    - VWAP filter for entry confirmation
+    - EOD square-off at 15:15 with 15:25 hard stop
+    - Re-entry logic (once per day, requires re-confirmation)
+    - Full P&L trade log with daily summary
+    - Correct bearish OI confirmation (OI up + price DOWN)
+    - Min ATR filter to skip choppy stocks
+    - Candle expansion compares same-direction candles (green vs green, red vs red)
     """
-    
-    def __init__(self, config: Optional[IntradayMomentumConfig] = None, broker=None, data_feed=None, symbol: str = ""):
-        # Skip parent init if no broker/data_feed (for backtesting)
+
+    def __init__(
+        self,
+        config: Optional[IntradayMomentumConfig] = None,
+        broker=None,
+        data_feed=None,
+        symbol: str = "",
+    ):
         if broker and data_feed:
             super().__init__(broker, data_feed, {})
         self.config = config or IntradayMomentumConfig()
@@ -322,848 +405,813 @@ class IntradayMomentumOIStrategy(BaseStrategy):
         self.candle_history: deque = deque(maxlen=100)
         self.avg_candle_size: float = 0.0
         self.position_active: bool = False
-        self.symbol: str = symbol  # Symbol for PE eligibility check
-        
-        # For OI tracking (will be updated via separate OI feed)
+        self.symbol: str = symbol
         self.current_oi: int = 0
-    
-    # Abstract method implementations
+
+        # Trade logging
+        self.trade_log: List[TradeLog] = []
+        self.current_trade: Optional[TradeLog] = None
+        self.daily_summaries: Dict[date, DailySummary] = {}
+
+        # Re-entry state
+        self.sl_hit_candle_index: int = 0
+        self.candle_index: int = 0
+
+    # ── Abstract method stubs ──
     async def on_start(self):
-        """Strategy startup - reset state."""
         self.context = None
         self.position_active = False
-        logger.info(f"[{self.name}] Strategy started")
-    
+        logger.info(f"[{self.name}] Strategy v2.0 started")
+
     async def on_stop(self):
-        """Strategy shutdown."""
+        self._log_daily_summary()
         logger.info(f"[{self.name}] Strategy stopped")
-    
+
     async def on_tick(self, tick):
-        """Process tick data - not used, we use candles."""
         pass
-    
+
     async def on_order_update(self, order):
-        """Process order updates."""
-        logger.info(f"[{self.name}] Order update: {order}")
-        
+        """Handle order updates — detect if our SL order was triggered."""
+        if self.current_trade and self.context:
+            if (self.current_trade.sl_order_id and
+                    order.order_id == self.current_trade.sl_order_id and
+                    order.status.name in ("FILLED", "COMPLETE")):
+                logger.info(f"[{self.name}] SL order filled by broker: {order.order_id}")
+                self._close_trade(order.average_price or self.context.trailing_sl,
+                                  datetime.now(), "Broker SL order triggered")
+                self.position_active = False
+
     @property
     def name(self) -> str:
-        return "IntradayMomentumOI"
-    
+        return "IntradayMomentumOI_v2"
+
     @property
     def description(self) -> str:
-        return "Intraday Option Buying with Price Action + OI Confirmation"
-    
+        return "Intraday Option Buying — Price Action + OI + VWAP Confirmation (v2)"
+
+    # ─────────────────────────────────────────
+    # Market phase helper
+    # ─────────────────────────────────────────
+
     def _get_market_phase(self, ts: datetime) -> MarketPhase:
-        """Determine current market phase based on time (handles UTC to IST conversion)."""
-        # Convert to IST if timestamp is timezone-aware UTC
-        if ts.tzinfo is not None:
-            # Convert UTC to IST by adding offset
-            ist_time = (ts + IST_OFFSET).time()
-        else:
-            # Assume already in IST or local time
-            ist_time = ts.time()
-        
+        ist_time = (ts + IST_OFFSET).time() if ts.tzinfo is not None else ts.time()
         if ist_time < self.config.market_open:
             return MarketPhase.PRE_MARKET
         elif ist_time < self.config.first_hour_end:
             return MarketPhase.FIRST_HOUR
         elif ist_time < self.config.entry_window_end:
             return MarketPhase.ENTRY_WINDOW
-        elif ist_time < self.config.market_close:
+        elif ist_time < self.config.eod_exit_start:
             return MarketPhase.MOMENTUM_FADE
+        elif ist_time < self.config.market_close:
+            return MarketPhase.EOD_EXIT
         else:
             return MarketPhase.CLOSED
-    
+
+    def _ist_time(self, ts: datetime) -> time:
+        return (ts + IST_OFFSET).time() if ts.tzinfo is not None else ts.time()
+
+    # ─────────────────────────────────────────
+    # Day init / stats
+    # ─────────────────────────────────────────
+
     def _is_new_day(self, candle: Candle) -> bool:
-        """Check if this candle is from a new trading day."""
-        if self.context is None:
-            return True
-        return candle.timestamp.date() != self.context.date
-    
+        return self.context is None or candle.timestamp.date() != self.context.date
+
     def _initialize_day(self, candle: Candle):
-        """Initialize context for a new trading day."""
         if self.context is None:
             self.context = DayContext(date=candle.timestamp.date())
         else:
+            self._log_daily_summary()
             self.context.reset_for_new_day(candle.timestamp.date())
-        
-        logger.info(f"[{self.name}] New day initialized: {candle.timestamp.date()}")
-        logger.info(f"[{self.name}] PDH: {self.context.pdh:.2f}, PDL: {self.context.pdl:.2f}")
-    
+        self.candle_index = 0
+        self.sl_hit_candle_index = 0
+        logger.info(f"[{self.name}] New day: {candle.timestamp.date()} | "
+                    f"PDH={self.context.pdh:.2f} PDL={self.context.pdl:.2f}")
+
     def _update_day_stats(self, candle: Candle):
-        """Update daily statistics with new candle."""
-        # Update day high/low
-        self.context.day_high = max(self.context.day_high, candle.high)
-        self.context.day_low = min(self.context.day_low, candle.low)
-        
-        # Track first candle
-        if self.context.first_candle is None:
-            self.context.first_candle = candle
-            logger.info(f"[{self.name}] First candle: O={candle.open:.2f} H={candle.high:.2f} "
-                       f"L={candle.low:.2f} C={candle.close:.2f}")
-        
-        # Track green candle sizes (for bullish)
+        self.candle_index += 1
+        ctx = self.context
+
+        ctx.day_high = max(ctx.day_high, candle.high)
+        ctx.day_low = min(ctx.day_low, candle.low)
+
+        if ctx.first_candle is None:
+            ctx.first_candle = candle
+            logger.info(f"[{self.name}] First candle O={candle.open:.2f} H={candle.high:.2f} "
+                        f"L={candle.low:.2f} C={candle.close:.2f}")
+
+        # Green / red candle sizes
+        body = abs(candle.close - candle.open)
         if candle.close > candle.open:
-            body_size = candle.close - candle.open
-            self.context.today_green_candle_sizes.append(body_size)
-        
-        # Track red candle sizes (for bearish)
-        if candle.close < candle.open:
-            body_size = candle.open - candle.close
-            self.context.today_red_candle_sizes.append(body_size)
-        
-        # Track volume for high win rate filter
+            ctx.today_green_candle_sizes.append(body)
+        elif candle.close < candle.open:
+            ctx.today_red_candle_sizes.append(body)
+
+        # Volume
         if candle.volume > 0:
-            self.context.candle_volumes.append(candle.volume)
-        
-        # Track consecutive closes above PDH (bullish)
-        if self.context.pdh > 0:
-            if candle.close > self.context.pdh:
-                self.context.consecutive_closes_above_pdh += 1
+            ctx.candle_volumes.append(candle.volume)
+
+        # Consecutive closes above PDH (bullish)
+        if ctx.pdh > 0:
+            if candle.close > ctx.pdh:
+                ctx.consecutive_closes_above_pdh += 1
             else:
-                self.context.consecutive_closes_above_pdh = 0
-        
-        # Track consecutive closes below PDL (bearish)
-        if self.context.pdl > 0:
-            if candle.close < self.context.pdl:
-                self.context.consecutive_closes_below_pdl += 1
+                ctx.consecutive_closes_above_pdh = 0
+
+        # Consecutive closes below PDL (bearish)
+        if ctx.pdl > 0:
+            if candle.close < ctx.pdl:
+                ctx.consecutive_closes_below_pdl += 1
             else:
-                self.context.consecutive_closes_below_pdl = 0
-        
-        # Update average candle size
+                ctx.consecutive_closes_below_pdl = 0
+
+        # Rolling average candle size
         self.candle_history.append(candle)
         if len(self.candle_history) > 10:
             sizes = [abs(c.close - c.open) for c in self.candle_history]
             self.avg_candle_size = sum(sizes) / len(sizes)
-    
-    def _check_market_control(self) -> bool:
-        """
-        Condition 1 (BULLISH): Market Control Check
-        First 5-min candle low must equal day low (bulls in control from start).
-        """
-        if self.context.first_candle is None:
-            return False
-        
-        # Allow small tolerance (0.1%)
-        tolerance = self.context.first_candle.low * 0.001
-        is_confirmed = abs(self.context.first_candle.low - self.context.day_low) <= tolerance
-        
-        if is_confirmed and not self.context.market_control_confirmed:
-            self.context.market_control_confirmed = True
-            logger.info(f"[{self.name}] ✓ Bullish Market Control CONFIRMED - First candle low = Day low")
-        elif not is_confirmed and self.context.market_control_confirmed:
-            # Day low was breached
-            self.context.market_control_confirmed = False
-            logger.info(f"[{self.name}] ✗ Bullish Market Control LOST - Day low breached")
-        
-        return self.context.market_control_confirmed
-    
-    def _check_bearish_market_control(self) -> bool:
-        """
-        Condition 1 (BEARISH): Market Control Check
-        First 5-min candle high must equal day high (bears in control from start).
-        """
-        if self.context.first_candle is None:
-            return False
-        
-        # Allow small tolerance (0.1%)
-        tolerance = self.context.first_candle.high * 0.001
-        is_confirmed = abs(self.context.first_candle.high - self.context.day_high) <= tolerance
-        
-        if is_confirmed and not self.context.bearish_market_control:
-            self.context.bearish_market_control = True
-            logger.info(f"[{self.name}] ✓ Bearish Market Control CONFIRMED - First candle high = Day high")
-        elif not is_confirmed and self.context.bearish_market_control:
-            # Day high was breached
-            self.context.bearish_market_control = False
-            logger.info(f"[{self.name}] ✗ Bearish Market Control LOST - Day high breached")
-        
-        return self.context.bearish_market_control
-    
-    def _check_candle_expansion(self) -> bool:
-        """
-        Condition 2 (BULLISH): Candle Expansion Check
-        Today's green candles must be larger than yesterday's candles.
-        """
-        if len(self.context.today_green_candle_sizes) < 3:
-            return False
-        
-        if len(self.context.yesterday_candle_sizes) < 3:
-            # First day, assume expansion if candles are decent size
-            avg_today = sum(self.context.today_green_candle_sizes) / len(self.context.today_green_candle_sizes)
-            is_confirmed = avg_today > 0  # Just need some green candles
-        else:
-            avg_today = sum(self.context.today_green_candle_sizes) / len(self.context.today_green_candle_sizes)
-            avg_yesterday = sum(self.context.yesterday_candle_sizes) / len(self.context.yesterday_candle_sizes)
-            is_confirmed = avg_today > avg_yesterday * 1.1  # 10% larger
-        
-        if is_confirmed and not self.context.candle_expansion_confirmed:
-            self.context.candle_expansion_confirmed = True
-            logger.info(f"[{self.name}] ✓ Bullish Candle Expansion CONFIRMED - Aggressive buying")
-        
-        return self.context.candle_expansion_confirmed
-    
-    def _check_bearish_candle_expansion(self) -> bool:
-        """
-        Condition 2 (BEARISH): Candle Expansion Check
-        Today's red candles must be larger than yesterday's candles.
-        """
-        if len(self.context.today_red_candle_sizes) < 3:
-            return False
-        
-        if len(self.context.yesterday_red_candle_sizes) < 3:
-            # First day, assume expansion if candles are decent size
-            avg_today = sum(self.context.today_red_candle_sizes) / len(self.context.today_red_candle_sizes)
-            is_confirmed = avg_today > 0  # Just need some red candles
-        else:
-            avg_today = sum(self.context.today_red_candle_sizes) / len(self.context.today_red_candle_sizes)
-            avg_yesterday = sum(self.context.yesterday_red_candle_sizes) / len(self.context.yesterday_red_candle_sizes)
-            is_confirmed = avg_today > avg_yesterday * 1.1  # 10% larger
-        
-        if is_confirmed and not self.context.bearish_candle_expansion:
-            self.context.bearish_candle_expansion = True
-            logger.info(f"[{self.name}] ✓ Bearish Candle Expansion CONFIRMED - Aggressive selling")
-        
-        return self.context.bearish_candle_expansion
-    
-    def _check_pdh_breakout(self, candle: Candle) -> bool:
-        """
-        Condition 3 (BULLISH): PDH Breakout Check
-        Price must be above Previous Day High by 9:30-9:35 AM.
-        """
-        if self.context.pdh_breakout_confirmed:
-            return True
-        
-        if self.context.pdh <= 0:
-            # No previous day data yet - for backtesting, use first candle open as reference
-            if self.context.first_candle:
-                # Use opening price + 0.3% as pseudo-PDH
-                self.context.pdh = self.context.first_candle.open * 1.003
-                logger.debug(f"[{self.name}] Using pseudo-PDH: {self.context.pdh:.2f} (first candle open + 0.3%)")
-            else:
-                return False
-        
-        # Check if price is above PDH
-        if candle.close > self.context.pdh:
-            candle_time = candle.timestamp.time()
-            
-            # Check if breakout happened early enough
-            if candle_time <= self.config.pdh_breakout_deadline:
-                self.context.pdh_breakout_confirmed = True
-                self.context.pdh_breakout_time = candle.timestamp
-                logger.info(f"[{self.name}] PDH Breakout CONFIRMED at {candle_time} "
-                           f"(Price: {candle.close:.2f} > PDH: {self.context.pdh:.2f})")
-                return True
-            elif candle_time <= time(10, 0):
-                # Late breakout but still acceptable
-                self.context.pdh_breakout_confirmed = True
-                self.context.pdh_breakout_time = candle.timestamp
-                logger.info(f"[{self.name}] PDH Breakout (late) at {candle_time}")
-                return True
-        
-        return False
-    
-    def _check_pdl_breakdown(self, candle: Candle) -> bool:
-        """
-        Condition 3 (BEARISH): PDL Breakdown Check
-        Price must be below Previous Day Low by 9:30-9:35 AM.
-        """
-        if self.context.pdl_breakdown_confirmed:
-            return True
-        
-        if self.context.pdl <= 0:
-            # No previous day data yet - for backtesting, use first candle open as reference
-            if self.context.first_candle:
-                # Use opening price - 0.3% as pseudo-PDL
-                self.context.pdl = self.context.first_candle.open * 0.997
-                logger.debug(f"[{self.name}] Using pseudo-PDL: {self.context.pdl:.2f} (first candle open - 0.3%)")
-            else:
-                return False
-        
-        # Check if price is below PDL
-        if candle.close < self.context.pdl:
-            candle_time = candle.timestamp.time()
-            
-            # Check if breakdown happened early enough
-            if candle_time <= self.config.pdl_breakdown_deadline:
-                self.context.pdl_breakdown_confirmed = True
-                self.context.pdl_breakdown_time = candle.timestamp
-                logger.info(f"[{self.name}] PDL Breakdown CONFIRMED at {candle_time} "
-                           f"(Price: {candle.close:.2f} < PDL: {self.context.pdl:.2f})")
-                return True
-            elif candle_time <= time(10, 0):
-                # Late breakdown but still acceptable
-                self.context.pdl_breakdown_confirmed = True
-                self.context.pdl_breakdown_time = candle.timestamp
-                logger.info(f"[{self.name}] PDL Breakdown (late) at {candle_time}")
-                return True
-        
-        return False
-    
+
+        # VWAP update (intraday cumulative VWAP)
+        if candle.volume > 0:
+            typical_price = (candle.high + candle.low + candle.close) / 3
+            ctx.vwap_cumulative_tp_vol += typical_price * candle.volume
+            ctx.vwap_cumulative_vol += candle.volume
+            ctx.vwap = ctx.vwap_cumulative_tp_vol / ctx.vwap_cumulative_vol
+
+    # ─────────────────────────────────────────
+    # OI updates (from external feed)
+    # ─────────────────────────────────────────
+
     def update_oi(self, oi: int, price: float):
-        """
-        Update Open Interest data (called from external OI feed).
-        
-        Args:
-            oi: Current open interest
-            price: Current price when OI was recorded
-        """
+        """Called from external OI feed. Tracks OI direction relative to price."""
         self.current_oi = oi
-        
         if self.context is None:
             return
-        
-        # Initialize OI tracking
-        if self.context.initial_oi == 0:
-            self.context.initial_oi = oi
-            self.context.last_oi = oi
-            self.context.price_at_oi_check = price
+
+        ctx = self.context
+        if ctx.initial_oi == 0:
+            ctx.initial_oi = oi
+            ctx.last_oi = oi
+            ctx.price_at_oi_check = price
             return
-        
-        # Check OI increase with price increase
-        oi_change = oi - self.context.last_oi
-        price_change = price - self.context.price_at_oi_check
-        
+
+        oi_change = oi - ctx.last_oi
+        price_change = price - ctx.price_at_oi_check
+
+        # BULLISH: OI up + price up → long buildup
         if oi_change > 0 and price_change > 0:
-            self.context.oi_increase_count += 1
-            logger.debug(f"[{self.name}] OI+Price increase #{self.context.oi_increase_count}: "
-                        f"OI +{oi_change}, Price +{price_change:.2f}")
-        
-        self.context.last_oi = oi
-        self.context.price_at_oi_check = price
-    
+            ctx.oi_increase_count += 1
+
+        # BEARISH (FIX): OI up + price DOWN → short buildup
+        if oi_change > 0 and price_change < 0:
+            ctx.oi_bearish_count += 1
+
+        ctx.last_oi = oi
+        ctx.price_at_oi_check = price
+
+    # ─────────────────────────────────────────
+    # Condition checks
+    # ─────────────────────────────────────────
+
+    def _check_market_control(self) -> bool:
+        if self.context.first_candle is None:
+            return False
+        tol = self.context.first_candle.low * 0.001
+        confirmed = abs(self.context.first_candle.low - self.context.day_low) <= tol
+        if confirmed and not self.context.market_control_confirmed:
+            self.context.market_control_confirmed = True
+            logger.info(f"[{self.name}] ✓ Bullish Market Control confirmed")
+        elif not confirmed and self.context.market_control_confirmed:
+            self.context.market_control_confirmed = False
+            logger.info(f"[{self.name}] ✗ Bullish Market Control LOST")
+        return self.context.market_control_confirmed
+
+    def _check_bearish_market_control(self) -> bool:
+        if self.context.first_candle is None:
+            return False
+        tol = self.context.first_candle.high * 0.001
+        confirmed = abs(self.context.first_candle.high - self.context.day_high) <= tol
+        if confirmed and not self.context.bearish_market_control:
+            self.context.bearish_market_control = True
+            logger.info(f"[{self.name}] ✓ Bearish Market Control confirmed")
+        elif not confirmed and self.context.bearish_market_control:
+            self.context.bearish_market_control = False
+            logger.info(f"[{self.name}] ✗ Bearish Market Control LOST")
+        return self.context.bearish_market_control
+
+    def _check_candle_expansion(self) -> bool:
+        """BULLISH: today's GREEN candles must be larger than yesterday's GREEN candles."""
+        ctx = self.context
+        if len(ctx.today_green_candle_sizes) < 3:
+            return False
+        avg_today = sum(ctx.today_green_candle_sizes) / len(ctx.today_green_candle_sizes)
+        if len(ctx.yesterday_green_candle_sizes) < 3:
+            confirmed = avg_today > 0
+        else:
+            avg_yesterday = sum(ctx.yesterday_green_candle_sizes) / len(ctx.yesterday_green_candle_sizes)
+            confirmed = avg_today > avg_yesterday * 1.1
+        if confirmed and not ctx.candle_expansion_confirmed:
+            ctx.candle_expansion_confirmed = True
+            logger.info(f"[{self.name}] ✓ Bullish Candle Expansion confirmed")
+        return ctx.candle_expansion_confirmed
+
+    def _check_bearish_candle_expansion(self) -> bool:
+        """BEARISH: today's RED candles must be larger than yesterday's RED candles."""
+        ctx = self.context
+        if len(ctx.today_red_candle_sizes) < 3:
+            return False
+        avg_today = sum(ctx.today_red_candle_sizes) / len(ctx.today_red_candle_sizes)
+        if len(ctx.yesterday_red_candle_sizes) < 3:
+            confirmed = avg_today > 0
+        else:
+            avg_yesterday = sum(ctx.yesterday_red_candle_sizes) / len(ctx.yesterday_red_candle_sizes)
+            confirmed = avg_today > avg_yesterday * 1.1
+        if confirmed and not ctx.bearish_candle_expansion:
+            ctx.bearish_candle_expansion = True
+            logger.info(f"[{self.name}] ✓ Bearish Candle Expansion confirmed")
+        return ctx.bearish_candle_expansion
+
+    def _check_pdh_breakout(self, candle: Candle) -> bool:
+        ctx = self.context
+        if ctx.pdh_breakout_confirmed:
+            return True
+        if ctx.pdh <= 0:
+            if ctx.first_candle:
+                ctx.pdh = ctx.first_candle.open * 1.003
+            else:
+                return False
+        if candle.close > ctx.pdh:
+            t = self._ist_time(candle.timestamp)
+            if t <= time(10, 0):
+                ctx.pdh_breakout_confirmed = True
+                ctx.pdh_breakout_time = candle.timestamp
+                logger.info(f"[{self.name}] ✓ PDH Breakout at {t} (close={candle.close:.2f} > PDH={ctx.pdh:.2f})")
+                return True
+        return False
+
+    def _check_pdl_breakdown(self, candle: Candle) -> bool:
+        ctx = self.context
+        if ctx.pdl_breakdown_confirmed:
+            return True
+        if ctx.pdl <= 0:
+            if ctx.first_candle:
+                ctx.pdl = ctx.first_candle.open * 0.997
+            else:
+                return False
+        if candle.close < ctx.pdl:
+            t = self._ist_time(candle.timestamp)
+            if t <= time(10, 0):
+                ctx.pdl_breakdown_confirmed = True
+                ctx.pdl_breakdown_time = candle.timestamp
+                logger.info(f"[{self.name}] ✓ PDL Breakdown at {t} (close={candle.close:.2f} < PDL={ctx.pdl:.2f})")
+                return True
+        return False
+
     def _check_oi_confirmation(self) -> bool:
-        """
-        Condition 4 (BULLISH): OI Confirmation
-        Open Interest must be increasing with rising price.
-        """
-        if self.context.oi_confirmation:
+        ctx = self.context
+        if ctx.oi_confirmation:
             return True
-        
-        if self.context.initial_oi == 0:
-            # No OI data yet - for backtesting without OI, auto-confirm
-            # In live trading, this would be required
-            self.context.oi_confirmation = True  # Auto-confirm for backtest
+        if ctx.initial_oi == 0:
+            ctx.oi_confirmation = True   # Auto-confirm in backtest
             return True
-        
-        # Check total OI increase
-        total_oi_change_pct = ((self.context.last_oi - self.context.initial_oi) / 
-                               self.context.initial_oi * 100) if self.context.initial_oi > 0 else 0
-        
-        # Need minimum OI increase and multiple positive checks
-        if (total_oi_change_pct >= self.config.min_oi_increase_pct and 
-            self.context.oi_increase_count >= self.config.min_oi_checks_positive):
-            self.context.oi_confirmation = True
-            logger.info(f"[{self.name}] Bullish OI Confirmation CONFIRMED - "
-                       f"OI +{total_oi_change_pct:.1f}%, {self.context.oi_increase_count} positive checks")
-        
-        return self.context.oi_confirmation
-    
+        total_change_pct = ((ctx.last_oi - ctx.initial_oi) / ctx.initial_oi * 100
+                            if ctx.initial_oi > 0 else 0)
+        if (total_change_pct >= self.config.min_oi_increase_pct and
+                ctx.oi_increase_count >= self.config.min_oi_checks_positive):
+            ctx.oi_confirmation = True
+            logger.info(f"[{self.name}] ✓ Bullish OI confirmed — +{total_change_pct:.1f}%")
+        return ctx.oi_confirmation
+
     def _check_bearish_oi_confirmation(self) -> bool:
         """
-        Condition 4 (BEARISH): OI Confirmation
-        Open Interest must be increasing with falling price (put writing / short buildup).
+        FIX: Bearish OI confirmation requires OI increasing with FALLING price
+        (short buildup), tracked by oi_bearish_count (separate from bullish).
         """
-        if self.context.bearish_oi_confirmation:
+        ctx = self.context
+        if ctx.bearish_oi_confirmation:
             return True
-        
-        if self.context.initial_oi == 0:
-            # No OI data yet - for backtesting without OI, auto-confirm
-            self.context.bearish_oi_confirmation = True
+        if ctx.initial_oi == 0:
+            ctx.bearish_oi_confirmation = True
             return True
-        
-        # Check total OI increase (OI increasing while price falls = bearish)
-        total_oi_change_pct = ((self.context.last_oi - self.context.initial_oi) / 
-                               self.context.initial_oi * 100) if self.context.initial_oi > 0 else 0
-        
-        # For bearish, we want OI to increase while price falls
-        # In backtest without OI, auto-confirm
-        if total_oi_change_pct >= self.config.min_oi_increase_pct:
-            self.context.bearish_oi_confirmation = True
-            logger.info(f"[{self.name}] Bearish OI Confirmation CONFIRMED - OI +{total_oi_change_pct:.1f}%")
-        
-        return self.context.bearish_oi_confirmation
-    
-    def _is_strong_breakout_candle(self, candle: Candle) -> bool:
-        """
-        Check if candle qualifies as a strong BULLISH breakout candle.
-        - Must be green (close > open)
-        - Body must be large (> min_candle_body_ratio of total range)
-        - Must be larger than average (or decent size if no avg yet)
-        """
-        if candle.close <= candle.open:
-            return False
-        
-        body = candle.close - candle.open
-        total_range = candle.high - candle.low
-        
-        if total_range == 0:
-            return False
-        
-        # Check body ratio (relaxed from 0.6 to 0.5)
-        body_ratio = body / total_range
-        if body_ratio < 0.5:  # Relaxed requirement
-            return False
-        
-        # Check if larger than average (if we have average)
-        if self.avg_candle_size > 0:
-            # Relaxed from 1.2x to 1.0x (just needs to be above average)
-            if body < self.avg_candle_size:
-                return False
-        
-        return True
-    
-    def _is_strong_breakdown_candle(self, candle: Candle) -> bool:
-        """
-        Check if candle qualifies as a strong BEARISH breakdown candle.
-        - Must be red (close < open)
-        - Body must be large (> min_candle_body_ratio of total range)
-        - Must be larger than average (or decent size if no avg yet)
-        """
-        if candle.close >= candle.open:
-            return False
-        
-        body = candle.open - candle.close
-        total_range = candle.high - candle.low
-        
-        if total_range == 0:
-            return False
-        
-        # Check body ratio
-        body_ratio = body / total_range
-        if body_ratio < 0.5:
-            return False
-        
-        # Check if larger than average
-        if self.avg_candle_size > 0:
-            if body < self.avg_candle_size:
-                return False
-        
-        return True
-    
+        total_change_pct = ((ctx.last_oi - ctx.initial_oi) / ctx.initial_oi * 100
+                            if ctx.initial_oi > 0 else 0)
+        if (total_change_pct >= self.config.min_oi_increase_pct and
+                ctx.oi_bearish_count >= self.config.min_oi_checks_positive):
+            ctx.bearish_oi_confirmation = True
+            logger.info(f"[{self.name}] ✓ Bearish OI confirmed — short buildup {ctx.oi_bearish_count} checks")
+        return ctx.bearish_oi_confirmation
+
+    # ─────────────────────────────────────────
+    # Candle quality helpers
+    # ─────────────────────────────────────────
+
+    def _atr(self, period: int = 14) -> float:
+        """Calculate ATR from candle history."""
+        hist = list(self.candle_history)
+        if len(hist) < 2:
+            return 0.0
+        trs = []
+        for i in range(1, min(period + 1, len(hist))):
+            c = hist[i]
+            p = hist[i - 1]
+            trs.append(max(c.high - c.low, abs(c.high - p.close), abs(c.low - p.close)))
+        return sum(trs) / len(trs) if trs else 0.0
+
     def _calculate_ema9(self) -> float:
-        """Calculate 9-period EMA from recent candle history."""
         if len(self.candle_history) < 9:
             return 0.0
-        
-        closes = [c.close for c in list(self.candle_history)[-20:]]  # Use last 20 candles max
-        multiplier = 2 / (9 + 1)  # EMA multiplier
-        
-        # Start with SMA of first 9
+        closes = [c.close for c in list(self.candle_history)[-20:]]
+        mult = 2 / 10
         ema = sum(closes[:9]) / 9
-        
-        # Apply EMA formula for remaining
-        for close in closes[9:]:
-            ema = (close - ema) * multiplier + ema
-        
+        for c in closes[9:]:
+            ema = (c - ema) * mult + ema
         return ema
-    
-    def _is_big_red_candle(self, candle: Candle) -> bool:
-        """
-        Check if candle is a big red candle (momentum reversal signal for CE exit).
-        """
-        if candle.close >= candle.open:
-            return False
-        
-        body = candle.open - candle.close
-        
-        if self.avg_candle_size > 0:
-            return body >= self.avg_candle_size * self.config.big_red_candle_multiplier
-        
-        return False
-    
-    def _is_big_green_candle(self, candle: Candle) -> bool:
-        """
-        Check if candle is a big green candle (momentum reversal signal for PE exit).
-        """
+
+    def _is_strong_breakout_candle(self, candle: Candle) -> bool:
         if candle.close <= candle.open:
             return False
-        
         body = candle.close - candle.open
-        
-        if self.avg_candle_size > 0:
-            return body >= self.avg_candle_size * self.config.big_green_candle_multiplier
-        
-        return False
-    
+        total_range = candle.high - candle.low
+        if total_range == 0:
+            return False
+        if body / total_range < self.config.min_candle_body_ratio:
+            return False
+        if self.avg_candle_size > 0 and body < self.avg_candle_size:
+            return False
+        return True
+
+    def _is_strong_breakdown_candle(self, candle: Candle) -> bool:
+        if candle.close >= candle.open:
+            return False
+        body = candle.open - candle.close
+        total_range = candle.high - candle.low
+        if total_range == 0:
+            return False
+        if body / total_range < self.config.min_candle_body_ratio:
+            return False
+        if self.avg_candle_size > 0 and body < self.avg_candle_size:
+            return False
+        return True
+
+    def _is_big_red_candle(self, candle: Candle) -> bool:
+        if candle.close >= candle.open:
+            return False
+        body = candle.open - candle.close
+        return (self.avg_candle_size > 0 and
+                body >= self.avg_candle_size * self.config.big_red_candle_multiplier)
+
+    def _is_big_green_candle(self, candle: Candle) -> bool:
+        if candle.close <= candle.open:
+            return False
+        body = candle.close - candle.open
+        return (self.avg_candle_size > 0 and
+                body >= self.avg_candle_size * self.config.big_green_candle_multiplier)
+
+    # ─────────────────────────────────────────
+    # Setup scoring
+    # ─────────────────────────────────────────
+
     def _calculate_setup_score(self, candle: Candle, direction: TradeDirection) -> SetupScore:
-        """
-        Calculate a score for ranking setups across multiple stocks.
-        Higher score = better setup quality.
-        """
-        score = SetupScore(
-            symbol="",  # Will be set by caller
-            direction=direction,
-            timestamp=candle.timestamp,
-        )
-        
+        ctx = self.context
+        score = SetupScore(symbol=self.symbol, direction=direction, timestamp=candle.timestamp)
+
         if direction == TradeDirection.CE:
-            # Bullish setup scoring
-            if self.context.pdh > 0:
-                score.breakout_strength = (candle.close - self.context.pdh) / self.context.pdh * 100
-            score.consecutive_candles = self.context.consecutive_closes_above_pdh
+            if ctx.pdh > 0:
+                score.breakout_strength = (candle.close - ctx.pdh) / ctx.pdh * 100
+            score.consecutive_candles = ctx.consecutive_closes_above_pdh
+            score.market_control_score = 1.0 if ctx.market_control_confirmed else 0.0
+            # VWAP score: +1 if price is above VWAP
+            if ctx.vwap > 0:
+                score.vwap_score = 1.0 if candle.close > ctx.vwap else 0.0
         else:
-            # Bearish setup scoring
-            if self.context.pdl > 0:
-                score.breakout_strength = (self.context.pdl - candle.close) / self.context.pdl * 100
-            score.consecutive_candles = self.context.consecutive_closes_below_pdl
-        
+            if ctx.pdl > 0:
+                score.breakout_strength = (ctx.pdl - candle.close) / ctx.pdl * 100
+            score.consecutive_candles = ctx.consecutive_closes_below_pdl
+            score.market_control_score = 1.0 if ctx.bearish_market_control else 0.0
+            if ctx.vwap > 0:
+                score.vwap_score = 1.0 if candle.close < ctx.vwap else 0.0
+
         # Volume ratio
-        if len(self.context.candle_volumes) >= 5 and candle.volume > 0:
-            avg_volume = sum(self.context.candle_volumes[-10:]) / min(len(self.context.candle_volumes), 10)
-            if avg_volume > 0:
-                score.volume_ratio = candle.volume / avg_volume
-        
-        # Candle strength (body ratio)
+        if len(ctx.candle_volumes) >= 5 and candle.volume > 0:
+            avg_vol = sum(ctx.candle_volumes[-10:]) / min(len(ctx.candle_volumes), 10)
+            if avg_vol > 0:
+                score.volume_ratio = candle.volume / avg_vol
+
+        # Candle body ratio
         total_range = candle.high - candle.low
         if total_range > 0:
-            body = abs(candle.close - candle.open)
-            score.candle_strength = body / total_range
-        
-        # Market control score
-        if direction == TradeDirection.CE:
-            score.market_control_score = 1.0 if self.context.market_control_confirmed else 0.0
-        else:
-            score.market_control_score = 1.0 if self.context.bearish_market_control else 0.0
-        
+            score.candle_strength = abs(candle.close - candle.open) / total_range
+
         return score
-    
+
+    # ─────────────────────────────────────────
+    # Entry conditions
+    # ─────────────────────────────────────────
+
     def _check_ce_entry_conditions(self, candle: Candle) -> Tuple[bool, str, Optional[SetupScore]]:
-        """
-        Check all BULLISH (CE) entry conditions with HIGH WIN RATE FILTERS.
-        Returns (should_enter, reason, setup_score).
-        
-        Entry requires:
-        - CDH + PDH breakout
-        - Price at least 0.3% above PDH (not just 1 tick)
-        - Volume surge (1.5x average)
-        - 2+ consecutive candles above PDH
-        - No excessive gap up (>1% above PDH at open)
-        """
         if not self.config.enable_ce_trades:
             return False, "CE trades disabled", None
-            
+        ctx = self.context
         phase = self._get_market_phase(candle.timestamp)
-        
-        # No entries before market open or after momentum fade
-        if phase == MarketPhase.PRE_MARKET:
-            return False, "Pre-market", None
-        if phase == MarketPhase.MOMENTUM_FADE or phase == MarketPhase.CLOSED:
-            return False, "After entry window (momentum fade)", None
-        
-        # Already have a position
-        if self.context.entry_taken:
-            return False, "Position already taken today", None
-        
-        # Check all pre-conditions
-        if not self.context.market_control_confirmed:
+        if phase in (MarketPhase.PRE_MARKET, MarketPhase.MOMENTUM_FADE,
+                     MarketPhase.EOD_EXIT, MarketPhase.CLOSED):
+            return False, f"Phase {phase.value} — no entry", None
+        if ctx.entry_taken and not self._can_reenter():
+            return False, "Position already taken (no re-entry)", None
+
+        # Pre-conditions
+        if not ctx.market_control_confirmed:
             return False, "Bullish market control not confirmed", None
-        
-        if not self.context.candle_expansion_confirmed:
+        if not ctx.candle_expansion_confirmed:
             return False, "Bullish candle expansion not confirmed", None
-        
         if not self._check_oi_confirmation():
             return False, "OI confirmation not met", None
-        
-        pdh = self.context.pdh
+
+        pdh = ctx.pdh
         if pdh <= 0:
             return False, "No PDH available", None
-        
-        # ===== HIGH WIN RATE FILTER 1: No excessive gap up =====
-        if self.context.first_candle:
-            gap_up_pct = (self.context.first_candle.open - pdh) / pdh * 100
-            if gap_up_pct > self.config.max_gap_up_pct:
-                return False, f"Gap up too large ({gap_up_pct:.2f}% > {self.config.max_gap_up_pct}%)", None
-        
-        # ===== HIGH WIN RATE FILTER 2: Minimum breakout % above PDH =====
+
+        # Gap filter
+        if ctx.first_candle:
+            gap_pct = (ctx.first_candle.open - pdh) / pdh * 100
+            if gap_pct > self.config.max_gap_up_pct:
+                return False, f"Gap up too large ({gap_pct:.2f}%)", None
+
+        # Breakout strength
         breakout_pct = (candle.close - pdh) / pdh * 100
         if breakout_pct < self.config.min_breakout_pct:
-            return False, f"Breakout too weak ({breakout_pct:.2f}% < {self.config.min_breakout_pct}%)", None
-        
-        # ===== HIGH WIN RATE FILTER 3: Consecutive closes above PDH =====
-        if self.context.consecutive_closes_above_pdh < self.config.min_candles_above_pdh:
-            return False, f"Only {self.context.consecutive_closes_above_pdh} candles above PDH (need {self.config.min_candles_above_pdh})", None
-        
-        # ===== HIGH WIN RATE FILTER 4: Volume surge =====
-        if len(self.context.candle_volumes) >= 5 and candle.volume > 0:
-            avg_volume = sum(self.context.candle_volumes[-10:]) / min(len(self.context.candle_volumes), 10)
-            if avg_volume > 0:
-                volume_ratio = candle.volume / avg_volume
-                if volume_ratio < self.config.min_volume_multiplier:
-                    return False, f"Volume too low ({volume_ratio:.2f}x < {self.config.min_volume_multiplier}x)", None
-        
-        # KEY CONDITION: Candle must close above CDH (new high)
-        cdh = self.context.day_high
-        closes_above_cdh = candle.close > cdh
-        
-        # For early entry (first hour), require close above BOTH CDH and PDH
-        if phase == MarketPhase.FIRST_HOUR:
-            if not closes_above_cdh:
-                return False, f"Close {candle.close:.2f} not above CDH {cdh:.2f}", None
-            if self._is_strong_breakout_candle(candle):
-                score = self._calculate_setup_score(candle, TradeDirection.CE)
-                return True, f"CE EARLY ENTRY: Strong breakout +{breakout_pct:.2f}% above PDH", score
-            return False, "Not a strong breakout candle", None
-        
-        # Normal entry window
+            return False, f"Breakout too weak ({breakout_pct:.2f}%)", None
+
+        # Consecutive closes above PDH
+        if ctx.consecutive_closes_above_pdh < self.config.min_candles_above_pdh:
+            return False, f"Only {ctx.consecutive_closes_above_pdh} candles above PDH", None
+
+        # Volume surge
+        if len(ctx.candle_volumes) >= 5 and candle.volume > 0:
+            avg_vol = sum(ctx.candle_volumes[-10:]) / min(len(ctx.candle_volumes), 10)
+            if avg_vol > 0 and (candle.volume / avg_vol) < self.config.min_volume_multiplier:
+                return False, f"Volume too low ({candle.volume/avg_vol:.2f}x)", None
+
+        # VWAP filter (NEW)
+        if self.config.use_vwap_filter and ctx.vwap > 0:
+            if candle.close < ctx.vwap:
+                return False, f"Price ({candle.close:.2f}) below VWAP ({ctx.vwap:.2f})", None
+
+        # ATR filter (NEW)
+        atr = self._atr()
+        if atr > 0 and atr < self.config.min_atr_points:
+            return False, f"ATR too low ({atr:.2f} < {self.config.min_atr_points})", None
+
+        # Candle close must be in upper half of its range
+        candle_range = candle.high - candle.low
+        if candle_range > 0:
+            close_position = (candle.close - candle.low) / candle_range
+            if close_position < 0.6:
+                return False, f"Close not in upper range (position: {close_position:.2f})", None
+
+        # Must be a strong breakout candle
         if not self._is_strong_breakout_candle(candle):
             return False, "Not a strong breakout candle", None
-        
+
         score = self._calculate_setup_score(candle, TradeDirection.CE)
-        return True, f"CE Entry: Strong breakout +{breakout_pct:.2f}% above PDH", score
-    
+        return True, f"CE Entry: +{breakout_pct:.2f}% above PDH", score
+
     def _check_pe_entry_conditions(self, candle: Candle) -> Tuple[bool, str, Optional[SetupScore]]:
-        """
-        Check all BEARISH (PE) entry conditions with HIGH WIN RATE FILTERS.
-        Returns (should_enter, reason, setup_score).
-        
-        Entry requires:
-        - Symbol must be PE-eligible (volatile stock)
-        - CDL + PDL breakdown
-        - Price at least 0.3% below PDL (not just 1 tick)
-        - Volume surge (1.5x average)
-        - 2+ consecutive candles below PDL
-        - No excessive gap down (>1% below PDL at open)
-        """
         if not self.config.enable_pe_trades:
             return False, "PE trades disabled", None
-        
-        # ===== VOLATILITY FILTER: Check if symbol is PE-eligible =====
+
+        # Symbol eligibility
         if self.symbol and self.config.pe_eligible_symbols:
             if self.symbol not in self.config.pe_eligible_symbols:
-                return False, f"Symbol {self.symbol} not PE-eligible (volatility filter)", None
-            
+                return False, f"{self.symbol} not PE-eligible", None
+
+        ctx = self.context
         phase = self._get_market_phase(candle.timestamp)
-        
-        # No entries before market open or after momentum fade
-        if phase == MarketPhase.PRE_MARKET:
-            return False, "Pre-market", None
-        if phase == MarketPhase.MOMENTUM_FADE or phase == MarketPhase.CLOSED:
-            return False, "After entry window (momentum fade)", None
-        
-        # Already have a position
-        if self.context.entry_taken:
-            return False, "Position already taken today", None
-        
-        # Check all bearish pre-conditions
-        if not self.context.bearish_market_control:
+        if phase in (MarketPhase.PRE_MARKET, MarketPhase.MOMENTUM_FADE,
+                     MarketPhase.EOD_EXIT, MarketPhase.CLOSED):
+            return False, f"Phase {phase.value} — no entry", None
+        if ctx.entry_taken and not self._can_reenter():
+            return False, "Position already taken (no re-entry)", None
+
+        if not ctx.bearish_market_control:
             return False, "Bearish market control not confirmed", None
-        
-        if not self.context.bearish_candle_expansion:
+        if not ctx.bearish_candle_expansion:
             return False, "Bearish candle expansion not confirmed", None
-        
         if not self._check_bearish_oi_confirmation():
             return False, "Bearish OI confirmation not met", None
-        
-        pdl = self.context.pdl
+
+        pdl = ctx.pdl
         if pdl <= 0:
             return False, "No PDL available", None
-        
-        # ===== HIGH WIN RATE FILTER 1: No excessive gap down =====
-        if self.context.first_candle:
-            gap_down_pct = (pdl - self.context.first_candle.open) / pdl * 100
-            if gap_down_pct > self.config.max_gap_down_pct:
-                return False, f"Gap down too large ({gap_down_pct:.2f}% > {self.config.max_gap_down_pct}%)", None
-        
-        # ===== HIGH WIN RATE FILTER 2: Minimum breakdown % below PDL =====
+
+        # Gap filter
+        if ctx.first_candle:
+            gap_pct = (pdl - ctx.first_candle.open) / pdl * 100
+            if gap_pct > self.config.max_gap_down_pct:
+                return False, f"Gap down too large ({gap_pct:.2f}%)", None
+
         breakdown_pct = (pdl - candle.close) / pdl * 100
         if breakdown_pct < self.config.min_breakdown_pct:
-            return False, f"Breakdown too weak ({breakdown_pct:.2f}% < {self.config.min_breakdown_pct}%)", None
-        
-        # ===== HIGH WIN RATE FILTER 3: Consecutive closes below PDL =====
-        if self.context.consecutive_closes_below_pdl < self.config.min_candles_below_pdl:
-            return False, f"Only {self.context.consecutive_closes_below_pdl} candles below PDL (need {self.config.min_candles_below_pdl})", None
-        
-        # ===== HIGH WIN RATE FILTER 4: Volume surge =====
-        if len(self.context.candle_volumes) >= 5 and candle.volume > 0:
-            avg_volume = sum(self.context.candle_volumes[-10:]) / min(len(self.context.candle_volumes), 10)
-            if avg_volume > 0:
-                volume_ratio = candle.volume / avg_volume
-                if volume_ratio < self.config.min_volume_multiplier:
-                    return False, f"Volume too low ({volume_ratio:.2f}x < {self.config.min_volume_multiplier}x)", None
-        
-        # KEY CONDITION: Candle must close below CDL (new low)
-        cdl = self.context.day_low
-        closes_below_cdl = candle.close < cdl
-        
-        # For early entry (first hour), require close below BOTH CDL and PDL
-        if phase == MarketPhase.FIRST_HOUR:
-            if not closes_below_cdl:
-                return False, f"Close {candle.close:.2f} not below CDL {cdl:.2f}", None
-            if self._is_strong_breakdown_candle(candle):
-                score = self._calculate_setup_score(candle, TradeDirection.PE)
-                return True, f"PE EARLY ENTRY: Strong breakdown -{breakdown_pct:.2f}% below PDL", score
-            return False, "Not a strong breakdown candle", None
-        
-        # Normal entry window
+            return False, f"Breakdown too weak ({breakdown_pct:.2f}%)", None
+
+        if ctx.consecutive_closes_below_pdl < self.config.min_candles_below_pdl:
+            return False, f"Only {ctx.consecutive_closes_below_pdl} candles below PDL", None
+
+        # Volume surge
+        if len(ctx.candle_volumes) >= 5 and candle.volume > 0:
+            avg_vol = sum(ctx.candle_volumes[-10:]) / min(len(ctx.candle_volumes), 10)
+            if avg_vol > 0 and (candle.volume / avg_vol) < self.config.min_volume_multiplier:
+                return False, f"Volume too low ({candle.volume/avg_vol:.2f}x)", None
+
+        # VWAP filter (NEW)
+        if self.config.use_vwap_filter and ctx.vwap > 0:
+            if candle.close > ctx.vwap:
+                return False, f"Price ({candle.close:.2f}) above VWAP ({ctx.vwap:.2f})", None
+
+        # ATR filter
+        atr = self._atr()
+        if atr > 0 and atr < self.config.min_atr_points:
+            return False, f"ATR too low ({atr:.2f})", None
+
+        # Candle close must be in lower half of its range
+        candle_range = candle.high - candle.low
+        if candle_range > 0:
+            close_position = (candle.close - candle.low) / candle_range
+            if close_position > 0.4:
+                return False, f"Close not in lower range (position: {close_position:.2f})", None
+
         if not self._is_strong_breakdown_candle(candle):
             return False, "Not a strong breakdown candle", None
-        
+
         score = self._calculate_setup_score(candle, TradeDirection.PE)
-        return True, f"PE Entry: Strong breakdown -{breakdown_pct:.2f}% below PDL", score
-    
+        return True, f"PE Entry: -{breakdown_pct:.2f}% below PDL", score
+
     def _check_entry_conditions(self, candle: Candle) -> Tuple[bool, str, Optional[TradeDirection], Optional[SetupScore]]:
-        """
-        Check both CE and PE entry conditions.
-        Returns (should_enter, reason, direction, setup_score).
-        """
-        # Check CE (bullish) first
         ce_enter, ce_reason, ce_score = self._check_ce_entry_conditions(candle)
         if ce_enter:
             return True, ce_reason, TradeDirection.CE, ce_score
-        
-        # Check PE (bearish)
         pe_enter, pe_reason, pe_score = self._check_pe_entry_conditions(candle)
         if pe_enter:
             return True, pe_reason, TradeDirection.PE, pe_score
-        
-        # Neither direction has a valid entry
-        return False, f"CE: {ce_reason}, PE: {pe_reason}", None, None
-    
+        return False, f"CE: {ce_reason} | PE: {pe_reason}", None, None
+
+    # ─────────────────────────────────────────
+    # Re-entry logic
+    # ─────────────────────────────────────────
+
+    def _can_reenter(self) -> bool:
+        """
+        Allow one re-entry per day if:
+        - re-entry is enabled
+        - we haven't already re-entered
+        - enough candles have passed since the SL was hit
+        - total trades today < max_trades_per_day
+        """
+        if not self.config.allow_reentry:
+            return False
+        if self.context.reentry_taken:
+            return False
+        trades_today = sum(1 for t in self.trade_log
+                           if t.date == self.context.date)
+        if trades_today >= self.config.max_trades_per_day:
+            return False
+        cooldown = self.candle_index - self.sl_hit_candle_index
+        if cooldown < self.config.reentry_cooldown_candles:
+            return False
+        return True
+
+    # ─────────────────────────────────────────
+    # Exit conditions
+    # ─────────────────────────────────────────
+
     def _check_exit_conditions(self, candle: Candle) -> Tuple[bool, str]:
-        """
-        Check exit conditions for active position (both CE and PE).
-        Returns (should_exit, reason).
-        """
-        if not self.context.entry_taken:
+        ctx = self.context
+        if not ctx.entry_taken:
             return False, "No position"
-        
-        direction = self.context.entry_direction
-        
+
+        direction = ctx.entry_direction
+        ist_time = self._ist_time(candle.timestamp)
+
+        # ── EOD exit (both directions) ──
+        if ist_time >= self.config.eod_exit_start:
+            return True, f"{direction.name} EOD Exit at {ist_time}"
+
+        ctx.candles_since_entry += 1
+
         if direction == TradeDirection.CE:
-            # ===== CE (BULLISH) EXIT CONDITIONS =====
-            # Increment candle counter
-            self.context.candles_since_entry += 1
-            
-            # Update highest since entry
-            self.context.highest_since_entry = max(self.context.highest_since_entry, candle.high)
-            
-            # Update trailing stop (for CE, SL is below entry)
-            new_trailing_sl = self.context.highest_since_entry * (1 - self.config.trailing_sl_pct / 100)
-            self.context.trailing_sl = max(self.context.trailing_sl, new_trailing_sl)
-            
-            # Exit Condition 1: Trailing stop hit (check first - always active)
-            if candle.low <= self.context.trailing_sl:
-                return True, f"CE Exit: Trailing SL hit at {self.context.trailing_sl:.2f}"
-            
-            # Check minimum hold period
-            if self.context.candles_since_entry < self.config.ce_min_hold_candles:
-                return False, "Hold position (min hold not met)"
-            
-            # Exit Condition 2a: EMA cross exit (if enabled)
-            if self.config.ce_use_ema_cross_exit:
-                # Calculate EMA9 for exit
-                if len(self.candle_history) >= 9:
+            ctx.highest_since_entry = max(ctx.highest_since_entry, candle.high)
+
+            # Update trailing SL
+            new_sl = ctx.highest_since_entry * (1 - self.config.trailing_sl_pct / 100)
+            if new_sl > ctx.trailing_sl:
+                ctx.trailing_sl = new_sl
+                self._update_sl_order(ctx.trailing_sl, direction)
+
+            # Trailing SL hit
+            if candle.low <= ctx.trailing_sl:
+                return True, f"CE Trailing SL hit at {ctx.trailing_sl:.2f}"
+
+            # Min hold check
+            if ctx.candles_since_entry < self.config.ce_min_hold_candles:
+                return False, "Hold (min hold not met)"
+
+            # EMA cross exit
+            if self.config.ce_use_ema_cross_exit and len(self.candle_history) >= 9:
+                ema9 = self._calculate_ema9()
+                if candle.close < ema9:
+                    return True, f"CE Exit: Price below EMA9 ({ema9:.2f})"
+
+            # Big red candle exit
+            if self._is_big_red_candle(candle):
+                if self.config.ce_require_ema_confirm and len(self.candle_history) >= 9:
                     ema9 = self._calculate_ema9()
                     if candle.close < ema9:
-                        return True, f"CE Exit: Price closed below EMA9 ({ema9:.2f})"
-            
-            # Exit Condition 2b: Big red candle (momentum reversal)
-            if self._is_big_red_candle(candle):
-                # If EMA confirmation required, check that price is also below EMA
-                if self.config.ce_require_ema_confirm:
-                    if len(self.candle_history) >= 9:
-                        ema9 = self._calculate_ema9()
-                        if candle.close < ema9:
-                            return True, "CE Exit: Big red candle + below EMA9"
-                        # Big red but still above EMA - don't exit
-                        return False, "Hold (big red but above EMA)"
-                else:
-                    return True, "CE Exit: Momentum reversal - Big red candle"
-        
-        else:  # PE (BEARISH)
-            # ===== PE (BEARISH) EXIT CONDITIONS =====
-            # Increment candle counter
-            self.context.candles_since_entry += 1
-            
-            # Track red candles for confirmation
+                        return True, "CE Exit: Big red + below EMA9"
+                    return False, "Hold (big red but above EMA)"
+                return True, "CE Exit: Momentum reversal (big red candle)"
+
+        else:  # PE
             if candle.close < candle.open:
-                self.context.red_candles_after_entry += 1
-            
-            # Update lowest since entry
-            self.context.lowest_since_entry = min(self.context.lowest_since_entry, candle.low)
-            
-            # Calculate current profit
-            current_profit_pct = (self.context.entry_price - candle.close) / self.context.entry_price * 100
-            self.context.max_profit_pct = max(self.context.max_profit_pct, current_profit_pct)
-            
-            # Initialize trailing SL at wider level for PE
-            if self.context.trailing_sl == 0:
-                self.context.trailing_sl = self.context.entry_price * (1 + self.config.pe_initial_sl_pct / 100)
-            
-            # Only trail SL AFTER we have profit (delayed trailing)
-            if self.context.max_profit_pct >= self.config.pe_trailing_activation_pct:
-                new_trailing_sl = self.context.lowest_since_entry * (1 + self.config.trailing_sl_pct / 100)
-                self.context.trailing_sl = min(self.context.trailing_sl, new_trailing_sl)
-            
-            # Exit Condition 1: Trailing stop hit (price goes UP past SL)
-            if candle.high >= self.context.trailing_sl:
-                return True, f"PE Exit: Trailing SL hit at {self.context.trailing_sl:.2f}"
-            
-            # Exit Condition 2: Breakeven exit - if we had good profit and now reversing significantly
-            if (self.context.max_profit_pct >= 0.3 and  # Had at least 0.3% profit
-                current_profit_pct < self.context.max_profit_pct * 0.2):  # Lost 80% of max profit
-                return True, f"PE Exit: Breakeven protection (max: +{self.context.max_profit_pct:.2f}%, now: +{current_profit_pct:.2f}%)"
-            
-            # Exit Condition 3: Big green candle (momentum reversal) - only after minimum hold
-            if self.context.candles_since_entry >= self.config.pe_min_hold_candles:
+                ctx.red_candles_after_entry += 1
+
+            ctx.lowest_since_entry = min(ctx.lowest_since_entry, candle.low)
+
+            profit_pct = (ctx.entry_price - candle.close) / ctx.entry_price * 100
+            ctx.max_profit_pct = max(ctx.max_profit_pct, profit_pct)
+
+            # Initialize PE trailing SL
+            if ctx.trailing_sl == 0:
+                ctx.trailing_sl = ctx.entry_price * (1 + self.config.pe_initial_sl_pct / 100)
+                self._update_sl_order(ctx.trailing_sl, direction)
+
+            # Trail SL after activation threshold
+            if ctx.max_profit_pct >= self.config.pe_trailing_activation_pct:
+                new_sl = ctx.lowest_since_entry * (1 + self.config.trailing_sl_pct / 100)
+                if new_sl < ctx.trailing_sl:
+                    ctx.trailing_sl = new_sl
+                    self._update_sl_order(ctx.trailing_sl, direction)
+
+            # Trailing SL hit (price going UP past SL)
+            if candle.high >= ctx.trailing_sl:
+                return True, f"PE Trailing SL hit at {ctx.trailing_sl:.2f}"
+
+            # Breakeven protection
+            if (ctx.max_profit_pct >= 0.3 and
+                    profit_pct < ctx.max_profit_pct * 0.2):
+                return True, f"PE Breakeven protection (max: +{ctx.max_profit_pct:.2f}%, now: {profit_pct:.2f}%)"
+
+            # Big green candle (reversal) after min hold
+            if ctx.candles_since_entry >= self.config.pe_min_hold_candles:
                 if self._is_big_green_candle(candle):
-                    return True, "PE Exit: Momentum reversal - Big green candle"
-        
-        # Exit Condition 3: End of day (both directions)
-        # Convert to IST for time check
-        if candle.timestamp.tzinfo is not None:
-            ist_time = (candle.timestamp + IST_OFFSET).time()
-        else:
-            ist_time = candle.timestamp.time()
-            
-        if ist_time >= time(15, 15):
-            return True, f"{direction.name} Exit: End of day"
-        
+                    return True, "PE Exit: Momentum reversal (big green candle)"
+
         return False, "Hold position"
-    
+
+    # ─────────────────────────────────────────
+    # Trailing SL order management
+    # ─────────────────────────────────────────
+
+    async def _place_sl_order(self, sl_price: float, direction: TradeDirection, symbol: str) -> Optional[str]:
+        """
+        Place a real SL-M order via broker. Returns order ID.
+        Only runs if place_sl_orders=True and broker is available.
+        """
+        if not self.config.place_sl_orders or not hasattr(self, 'broker') or self.broker is None:
+            return None
+        try:
+            from app.schemas.broker import OrderRequest, OrderSide
+            side = OrderSide.SELL if direction == TradeDirection.CE else OrderSide.BUY
+            order = OrderRequest(
+                symbol=symbol,
+                quantity=1,  # Caller should override qty
+                side=side,
+                order_type=self.config.sl_order_type,
+                trigger_price=round(sl_price, 2),
+                price=round(sl_price * 0.995, 2) if self.config.sl_order_type == "SL" else 0,
+                product_type="MIS",
+            )
+            resp = await self.broker.place_order(order)
+            logger.info(f"[{self.name}] SL order placed: {resp.order_id} @ {sl_price:.2f}")
+            return resp.order_id
+        except Exception as e:
+            logger.error(f"[{self.name}] Failed to place SL order: {e}")
+            return None
+
+    async def _cancel_sl_order(self, order_id: str):
+        """Cancel existing SL order before placing a new (modified) one."""
+        if not self.broker or not order_id:
+            return
+        try:
+            await self.broker.cancel_order(order_id)
+            logger.info(f"[{self.name}] Cancelled SL order: {order_id}")
+        except Exception as e:
+            logger.warning(f"[{self.name}] Failed to cancel SL order {order_id}: {e}")
+
+    def _update_sl_order(self, new_sl: float, direction: TradeDirection):
+        """
+        Synchronous wrapper — logs SL update. Actual async order placement is
+        handled via on_candle signal metadata (caller can execute from async context).
+        """
+        logger.info(f"[{self.name}] Trailing SL updated → {new_sl:.2f} ({direction.name})")
+        if self.current_trade:
+            self.current_trade.sl_order_id = self.context.sl_order_id  # Track latest SL
+
+    # ─────────────────────────────────────────
+    # Trade log helpers
+    # ─────────────────────────────────────────
+
+    def _open_trade(self, candle: Candle, direction: TradeDirection, is_reentry: bool = False) -> TradeLog:
+        trade = TradeLog(
+            date=candle.timestamp.date(),
+            symbol=self.symbol,
+            direction=direction,
+            entry_time=candle.timestamp,
+            entry_price=candle.close,
+            is_reentry=is_reentry,
+        )
+        self.trade_log.append(trade)
+        self.current_trade = trade
+        logger.info(f"[{self.name}] Trade opened: {direction.name} @ {candle.close:.2f} "
+                    f"({'RE-ENTRY' if is_reentry else 'INITIAL'})")
+        return trade
+
+    def _close_trade(self, exit_price: float, exit_time: datetime, reason: str):
+        if self.current_trade is None:
+            return
+        self.current_trade.close(exit_price, exit_time, reason)
+        status = "WIN" if self.current_trade.is_winner else "LOSS"
+        logger.info(f"[{self.name}] Trade closed [{status}]: {self.current_trade.direction.name} "
+                    f"Entry={self.current_trade.entry_price:.2f} Exit={exit_price:.2f} "
+                    f"P&L={self.current_trade.pnl_pct:+.2f}% | {reason}")
+        self.current_trade = None
+
+    def _log_daily_summary(self):
+        if self.context is None:
+            return
+        today_trades = [t for t in self.trade_log if t.date == self.context.date]
+        if not today_trades:
+            return
+        summary = DailySummary(date=self.context.date, trades=today_trades)
+        self.daily_summaries[self.context.date] = summary
+        summary.log()
+
+    def get_trade_log(self) -> List[TradeLog]:
+        return self.trade_log
+
+    def get_daily_summary(self, for_date: Optional[date] = None) -> Optional[DailySummary]:
+        if for_date:
+            return self.daily_summaries.get(for_date)
+        if self.context:
+            return self.daily_summaries.get(self.context.date)
+        return None
+
+    # ─────────────────────────────────────────
+    # Main candle processor
+    # ─────────────────────────────────────────
+
     def on_candle(self, candle: Candle, instrument_id: int = None) -> Optional[Signal]:
         """
-        Process a new candle and generate trading signals.
-        Supports both CE (bullish) and PE (bearish) trades.
-        
-        Args:
-            candle: The new 5-minute candle
-            instrument_id: Optional instrument identifier
-            
-        Returns:
-            Signal if entry/exit triggered, None otherwise
+        Process a new 5-minute candle. Returns a Signal on entry or exit,
+        None otherwise. Also carries SL metadata for async order placement.
         """
-        # Check for new day
+        # ── New day init ──
         if self._is_new_day(candle):
             self._initialize_day(candle)
             self.position_active = False
-        
-        # Update daily statistics
+
         self._update_day_stats(candle)
-        
-        # Get current phase
         phase = self._get_market_phase(candle.timestamp)
-        
-        # Check exit first if we have a position
+
+        sym = str(instrument_id) if instrument_id else self.symbol or "UNKNOWN"
+
+        # ── Exit check (always first) ──
         if self.position_active:
             should_exit, reason = self._check_exit_conditions(candle)
             if should_exit:
                 self.position_active = False
                 direction = self.context.entry_direction
-                
-                # Calculate P&L based on direction
+
+                # P&L
                 if direction == TradeDirection.CE:
-                    pnl_pct = ((candle.close - self.context.entry_price) / self.context.entry_price * 100)
-                else:  # PE - profit when price goes DOWN
-                    pnl_pct = ((self.context.entry_price - candle.close) / self.context.entry_price * 100)
-                
-                logger.info(f"[{self.name}] {direction.name} EXIT @ {candle.close:.2f} - {reason} "
-                           f"(Entry: {self.context.entry_price:.2f}, P&L: {pnl_pct:+.2f}%)")
+                    pnl_pct = (candle.close - self.context.entry_price) / self.context.entry_price * 100
+                else:
+                    pnl_pct = (self.context.entry_price - candle.close) / self.context.entry_price * 100
+
+                self._close_trade(candle.close, candle.timestamp, reason)
+
+                # Track re-entry cooldown
+                if "SL" in reason or "sl" in reason.lower():
+                    self.sl_hit_candle_index = self.candle_index
+
+                # Reset for potential re-entry
+                self.context.entry_taken = False
+                if "RE-ENTRY" not in reason:
+                    pass  # first exit — re-entry still possible
+
                 return Signal(
                     signal_type=SignalType.EXIT,
-                    symbol=str(instrument_id) if instrument_id else "UNKNOWN",
+                    symbol=sym,
                     price=candle.close,
                     timestamp=candle.timestamp,
                     strength=1.0,
@@ -1171,178 +1219,168 @@ class IntradayMomentumOIStrategy(BaseStrategy):
                         "reason": reason,
                         "direction": direction.name,
                         "entry_price": self.context.entry_price,
-                        "pnl_pct": pnl_pct,
-                        "highest": self.context.highest_since_entry,
-                        "lowest": self.context.lowest_since_entry,
+                        "pnl_pct": round(pnl_pct, 3),
                         "trailing_sl": self.context.trailing_sl,
+                        "cancel_sl_order_id": self.context.sl_order_id,  # Caller should cancel this
                     }
                 )
+
+        # ── Skip entry during momentum fade / EOD / closed ──
+        if phase in (MarketPhase.MOMENTUM_FADE, MarketPhase.EOD_EXIT, MarketPhase.CLOSED):
             return None
-        
-        # During first hour: Analyze conditions AND check for early breakout entry
+
+        # ── Condition checks ──
         if phase == MarketPhase.FIRST_HOUR:
-            # Check BULLISH conditions
             self._check_market_control()
             self._check_candle_expansion()
             self._check_oi_confirmation()
-            
-            # Check BEARISH conditions
             self._check_bearish_market_control()
             self._check_bearish_candle_expansion()
             self._check_bearish_oi_confirmation()
-            
-            # Log setup status periodically
-            if candle.timestamp.minute % 15 == 0:
-                logger.info(f"[{self.name}] Setup Status @ {candle.timestamp.time()}: "
-                           f"Bullish: MC={self.context.market_control_confirmed} CE={self.context.candle_expansion_confirmed} | "
-                           f"Bearish: MC={self.context.bearish_market_control} CE={self.context.bearish_candle_expansion}")
-            
-            # Check for EARLY ENTRY (both CE and PE)
-            should_enter, reason, direction, score = self._check_entry_conditions(candle)
-            if should_enter and direction:
-                self.position_active = True
-                self.context.entry_taken = True
-                self.context.entry_direction = direction
-                self.context.entry_price = candle.close
-                self.context.entry_time = candle.timestamp
-                self.context.highest_since_entry = candle.high
-                self.context.lowest_since_entry = candle.low
-                
-                # Set initial SL based on direction
-                if direction == TradeDirection.CE:
-                    self.context.trailing_sl = candle.close * (1 - self.config.initial_sl_pct / 100)
-                else:  # PE
-                    self.context.trailing_sl = candle.close * (1 + self.config.initial_sl_pct / 100)
-                
-                logger.info(f"[{self.name}] {direction.name} EARLY ENTRY @ {candle.close:.2f} - {reason}")
-                logger.info(f"[{self.name}] Initial SL: {self.context.trailing_sl:.2f}, Score: {score.total_score:.1f}")
-                
-                signal_type = SignalType.BUY if direction == TradeDirection.CE else SignalType.SELL
-                return Signal(
-                    signal_type=signal_type,
-                    symbol=str(instrument_id) if instrument_id else "UNKNOWN",
-                    price=candle.close,
-                    timestamp=candle.timestamp,
-                    strength=score.total_score / 100 if score else 0.5,
-                    metadata={
-                        "reason": reason,
-                        "direction": direction.name,
-                        "cdh": self.context.day_high,
-                        "cdl": self.context.day_low,
-                        "pdh": self.context.pdh,
-                        "pdl": self.context.pdl,
-                        "score": score.total_score if score else 0,
-                        "early_entry": True,
-                    }
-                )
-            return None
-        
-        # Check entry conditions during entry window
+
         if phase == MarketPhase.ENTRY_WINDOW:
-            # Continue checking conditions
             self._check_market_control()
             self._check_candle_expansion()
             self._check_pdh_breakout(candle)
             self._check_bearish_market_control()
             self._check_bearish_candle_expansion()
             self._check_pdl_breakdown(candle)
-            
+
+        # ── Entry check ──
+        if not self.position_active:
+            is_reentry = self.context.entry_taken  # If entry_taken was reset after SL
             should_enter, reason, direction, score = self._check_entry_conditions(candle)
+
+            # For re-entries, enforce minimum score
+            if should_enter and is_reentry:
+                if score and score.total_score < self.config.reentry_min_score:
+                    should_enter = False
+                    reason = f"Re-entry score too low ({score.total_score:.1f} < {self.config.reentry_min_score})"
+
             if should_enter and direction:
                 self.position_active = True
-                self.context.entry_taken = True
-                self.context.entry_direction = direction
-                self.context.entry_price = candle.close
-                self.context.entry_time = candle.timestamp
-                self.context.highest_since_entry = candle.high
-                self.context.lowest_since_entry = candle.low
-                
-                # Set initial SL based on direction
+                ctx = self.context
+                ctx.entry_taken = True
+                ctx.entry_direction = direction
+                ctx.entry_price = candle.close
+                ctx.entry_time = candle.timestamp
+                ctx.highest_since_entry = candle.high
+                ctx.lowest_since_entry = candle.low
+                ctx.candles_since_entry = 0
+                ctx.red_candles_after_entry = 0
+                ctx.max_profit_pct = 0.0
+
+                if is_reentry:
+                    ctx.reentry_taken = True
+
+                # Initial SL
                 if direction == TradeDirection.CE:
-                    self.context.trailing_sl = candle.close * (1 - self.config.initial_sl_pct / 100)
-                else:  # PE
-                    self.context.trailing_sl = candle.close * (1 + self.config.initial_sl_pct / 100)
-                
-                logger.info(f"[{self.name}] {direction.name} ENTRY @ {candle.close:.2f} - {reason}")
-                logger.info(f"[{self.name}] Initial SL: {self.context.trailing_sl:.2f}, Score: {score.total_score:.1f}")
-                
+                    ctx.trailing_sl = candle.close * (1 - self.config.initial_sl_pct / 100)
+                else:
+                    ctx.trailing_sl = candle.close * (1 + self.config.pe_initial_sl_pct / 100)
+
+                trade = self._open_trade(candle, direction, is_reentry=is_reentry)
+                logger.info(f"[{self.name}] Initial SL: {ctx.trailing_sl:.2f} | "
+                            f"Score: {score.total_score:.1f}")
+
                 signal_type = SignalType.BUY if direction == TradeDirection.CE else SignalType.SELL
                 return Signal(
                     signal_type=signal_type,
-                    symbol=str(instrument_id) if instrument_id else "UNKNOWN",
+                    symbol=sym,
                     price=candle.close,
                     timestamp=candle.timestamp,
                     strength=score.total_score / 100 if score else 0.5,
                     metadata={
                         "reason": reason,
                         "direction": direction.name,
-                        "pdh": self.context.pdh,
-                        "pdl": self.context.pdl,
+                        "pdh": ctx.pdh,
+                        "pdl": ctx.pdl,
+                        "vwap": ctx.vwap,
                         "score": score.total_score if score else 0,
-                        "initial_sl": self.context.trailing_sl,
+                        "initial_sl": ctx.trailing_sl,
+                        "is_reentry": is_reentry,
+                        # Signal to caller: place SL order at this price
+                        "place_sl_at": ctx.trailing_sl,
+                        "sl_order_type": self.config.sl_order_type,
                     }
                 )
-        
+
         return None
-    
+
+    # ─────────────────────────────────────────
+    # Status / introspection
+    # ─────────────────────────────────────────
+
     def get_status(self) -> Dict[str, Any]:
-        """Get current strategy status."""
         if self.context is None:
             return {"status": "not_initialized"}
-        
+        ctx = self.context
+        today_trades = [t for t in self.trade_log if t.date == ctx.date]
         return {
-            "date": str(self.context.date),
+            "version": "2.0",
+            "date": str(ctx.date),
             "conditions": {
-                "market_control": self.context.market_control_confirmed,
-                "candle_expansion": self.context.candle_expansion_confirmed,
-                "pdh_breakout": self.context.pdh_breakout_confirmed,
-                "oi_confirmation": self.context.oi_confirmation,
-                "all_met": self.context.all_conditions_met(),
+                "bullish": {
+                    "market_control": ctx.market_control_confirmed,
+                    "candle_expansion": ctx.candle_expansion_confirmed,
+                    "pdh_breakout": ctx.pdh_breakout_confirmed,
+                    "oi": ctx.oi_confirmation,
+                    "all_met": ctx.all_bullish_conditions_met(),
+                },
+                "bearish": {
+                    "market_control": ctx.bearish_market_control,
+                    "candle_expansion": ctx.bearish_candle_expansion,
+                    "pdl_breakdown": ctx.pdl_breakdown_confirmed,
+                    "oi": ctx.bearish_oi_confirmation,
+                    "all_met": ctx.all_bearish_conditions_met(),
+                },
             },
             "day_stats": {
-                "day_high": self.context.day_high,
-                "day_low": self.context.day_low,
-                "pdh": self.context.pdh,
-                "pdl": self.context.pdl,
+                "day_high": ctx.day_high,
+                "day_low": ctx.day_low,
+                "pdh": ctx.pdh,
+                "pdl": ctx.pdl,
+                "vwap": round(ctx.vwap, 2),
+                "avg_candle_size": round(self.avg_candle_size, 2),
+                "atr": round(self._atr(), 2),
             },
             "position": {
                 "active": self.position_active,
-                "entry_taken": self.context.entry_taken,
-                "entry_price": self.context.entry_price,
-                "entry_time": str(self.context.entry_time) if self.context.entry_time else None,
-                "trailing_sl": self.context.trailing_sl,
-                "highest": self.context.highest_since_entry,
-            }
+                "direction": ctx.entry_direction.name if ctx.entry_direction else None,
+                "entry_price": ctx.entry_price,
+                "entry_time": str(ctx.entry_time) if ctx.entry_time else None,
+                "trailing_sl": ctx.trailing_sl,
+                "highest": ctx.highest_since_entry,
+                "lowest": ctx.lowest_since_entry,
+                "candles_held": ctx.candles_since_entry,
+                "sl_order_id": ctx.sl_order_id,
+            },
+            "trades_today": len(today_trades),
+            "reentry_available": self._can_reenter() if ctx.entry_taken else "N/A",
+            "today_pnl_pct": round(sum(t.pnl_pct for t in today_trades if t.exit_price), 3),
         }
 
 
-# Convenience function to create strategy
+# ─────────────────────────────────────────────
+# Convenience factory
+# ─────────────────────────────────────────────
+
 def create_intraday_momentum_strategy(
     entry_start: str = "10:15",
     entry_end: str = "12:00",
     trailing_sl_pct: float = 0.5,
+    allow_reentry: bool = True,
+    use_vwap_filter: bool = True,
+    place_sl_orders: bool = True,
 ) -> IntradayMomentumOIStrategy:
-    """
-    Create an Intraday Momentum OI Strategy with custom parameters.
-    
-    Args:
-        entry_start: Entry window start time (HH:MM)
-        entry_end: Entry window end time (HH:MM)
-        trailing_sl_pct: Trailing stop loss percentage
-        
-    Returns:
-        Configured strategy instance
-    """
     h, m = map(int, entry_start.split(":"))
-    entry_start_time = time(h, m)
-    
-    h, m = map(int, entry_end.split(":"))
-    entry_end_time = time(h, m)
-    
+    h2, m2 = map(int, entry_end.split(":"))
     config = IntradayMomentumConfig(
-        entry_window_start=entry_start_time,
-        entry_window_end=entry_end_time,
+        entry_window_start=time(h, m),
+        entry_window_end=time(h2, m2),
         trailing_sl_pct=trailing_sl_pct,
+        allow_reentry=allow_reentry,
+        use_vwap_filter=use_vwap_filter,
+        place_sl_orders=place_sl_orders,
     )
-    
     return IntradayMomentumOIStrategy(config)

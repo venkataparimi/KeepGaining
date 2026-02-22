@@ -279,6 +279,24 @@ Identifies strong sectors at market open and trades stocks within those sectors.
 
 #### Scoring Formula
 
+---
+
+### 4.4 Earnings Momentum & Sentiment (EMOS) Strategy
+
+**File:** [`backend/app/strategies/emos_strategy.py`](file:///c:/code/KeepGaining/backend/app/strategies/emos_strategy.py)  
+**Lines:** 893  
+**Type:** Momentum / Event-Driven
+
+#### Description
+Capitalizes on extreme price action clustering around major news catalysts and corporate earnings cycles via technical + volatility breakout measurement. 
+
+#### Entry Rules
+1. Volume profile expands significantly vs 20-day baseline > 2.0x.
+2. Implied Volatility jumps outside Bollinger Bands threshold.
+3. EMA confirms initial breakout direction.
+
+#### Scoring Formula
+
 ```
 Sector Score = (Gap Score × 40%) + (Candle Strength × 35%) + (Momentum × 25%)
 ```
@@ -395,6 +413,15 @@ Strategies based on pure candle analysis without indicators:
 | **SentimentAnalyzer** | `sentiment_analyzer.py` | News/social sentiment |
 | **PortfolioOptimizer** | `portfolio_optimizer.py` | Mean-variance, risk parity |
 | **TradeAnalytics** | `trade_analytics_service.py` | Performance metrics |
+
+### MCP Automation Services
+
+| Service | File | Purpose |
+|---------|------|---------|
+| **MCPManager** | `mcp/manager.py` | Master orchestrator of DevTools & Playwright modules |
+| **BrokerLogin** | `mcp/automators/broker_login.py` | Auto TOTP resolution and credential lifecycle |
+| **TrendlyneScraper**| `mcp/scrapers/trendlyne.py` | Browser-driven F&O scraping from trendlyne |
+| **ChartinkScraper** | `mcp/scrapers/chartink.py` | Headless evaluation of custom screener logic |
 
 ---
 
