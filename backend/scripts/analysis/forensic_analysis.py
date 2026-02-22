@@ -1,126 +1,117 @@
-"""
-Forensic Analysis of Winning Trade
-Reverse-engineer the indicators at the exact entry time to find the winning pattern.
-"""
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import sqlite3
+import asyncio
+import asyncpg
 import pandas as pd
-from loguru import logger
+from datetime import datetime, date
 
-DB_PATH = "keepgaining.db"
+async def analyze_trade():
+    pool = await asyncpg.create_pool('postgresql://user:password@127.0.0.1:5432/keepgaining')
+    
+    symbol = 'LAURUSLABS'
+    trade_date = date(2025, 12, 9)
+    
+    print("=" * 100)
+    print(f"FORENSIC ANALYSIS: {symbol} on {trade_date}")
+    print("=" * 100)
+    
+    # Get the trade details from strategy_trades
+    trade = await pool.fetchrow('''
+        SELECT * FROM strategy_trades
+        WHERE symbol = $1 AND trade_date = $2
+    ''', symbol, trade_date)
+    
+    if trade:
+        print(f"\nTrade Details:")
+        print(f"  Option: {trade['option_type']} {trade['strike_price']}")
+        print(f"  Entry Time: {trade['entry_time']}")
+        print(f"  Exit Time: {trade['exit_time']}")
+        print(f"  Exit Reason: {trade['exit_reason']}")
+        print(f"  Entry Premium: Rs {trade['entry_premium']:.2f}")
+        print(f"  Exit Premium: Rs {trade['exit_premium']:.2f}")
+        print(f"  P&L: {trade['pnl_pct']:.1f}% (Rs {trade['pnl_amount']:,.0f})")
+        print(f"  Spot at Entry: Rs {trade['spot_at_entry']:.2f}")
+        print(f"  Spot at Exit: Rs {trade['spot_at_exit']:.2f}")
+        print(f"  Morning Momentum: {trade['momentum_pct']:.2f}%")
+    
+    # Get equity candle data for the whole day
+    equity_candles = await pool.fetch('''
+        SELECT c.timestamp, c.open, c.high, c.low, c.close, c.volume
+        FROM candle_data c
+        JOIN instrument_master im ON c.instrument_id = im.instrument_id
+        WHERE im.trading_symbol = $1 
+          AND im.instrument_type = 'EQUITY'
+          AND DATE(c.timestamp) = $2
+          AND c.timestamp::time >= '03:45:00'  -- 9:15 IST
+          AND c.timestamp::time <= '09:30:00'  -- 3:00 PM IST
+        ORDER BY c.timestamp
+    ''', symbol, trade_date)
+    
+    if equity_candles:
+        df = pd.DataFrame([dict(r) for r in equity_candles])
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+        # Calculate IST time
+        df['ist_time'] = df['timestamp'].dt.time
+        
+        print("\n" + "=" * 100)
+        print("EQUITY PRICE MOVEMENT (Every 15 minutes):")
+        print("=" * 100)
+        
+        # Show key timepoints
+        key_times = ['03:45:00', '04:00:00', '04:15:00', '04:30:00', '05:00:00', 
+                     '06:00:00', '07:00:00', '08:00:00', '09:00:00', '09:30:00']
+        
+        for kt in key_times:
+            candle = df[df['timestamp'].dt.time == pd.to_datetime(kt).time()]
+            if not candle.empty:
+                row = candle.iloc[0]
+                hour_ist = (pd.to_datetime(kt).hour + 5) + (pd.to_datetime(kt).minute + 30) // 60
+                min_ist = (pd.to_datetime(kt).minute + 30) % 60
+                change_from_open = ((row['close'] - df.iloc[0]['open']) / df.iloc[0]['open']) * 100
+                print(f"  {hour_ist:02d}:{min_ist:02d} IST | Open: {row['open']:7.2f} | High: {row['high']:7.2f} | Low: {row['low']:7.2f} | Close: {row['close']:7.2f} | Change: {change_from_open:+6.2f}%")
+        
+        # Calculate volatility metrics
+        day_open = df.iloc[0]['open']
+        morning_930 = df[df['timestamp'].dt.time == pd.to_datetime('04:00:00').time()].iloc[0]['close'] if not df[df['timestamp'].dt.time == pd.to_datetime('04:00:00').time()].empty else None
+        
+        if morning_930:
+            morning_momentum = ((morning_930 - day_open) / day_open) * 100
+            print(f"\n  📊 Morning Momentum (9:15 to 9:30): {morning_momentum:+.2f}%")
+            
+            # What happened after 9:30?
+            post_930 = df[df['timestamp'] > df[df['timestamp'].dt.time == pd.to_datetime('04:00:00').time()].iloc[0]['timestamp']]
+            if not post_930.empty:
+                max_gain = ((post_930['high'].max() - morning_930) / morning_930) * 100
+                max_drop = ((post_930['low'].min() - morning_930) / morning_930) * 100
+                print(f"  📈 Max Gain After Entry: {max_gain:+.2f}%")
+                print(f"  📉 Max Drop After Entry: {max_drop:+.2f}%")
+    
+    # Get option premium data
+    print("\n" + "=" * 100)
+    print("OPTION PREMIUM MOVEMENT:")
+    print("=" * 100)
+    
+    if trade:
+        option_candles = await pool.fetch('''
+            SELECT c.timestamp, c.open, c.high, c.low, c.close, c.volume
+            FROM candle_data c
+            JOIN instrument_master im ON c.instrument_id = im.instrument_id
+            JOIN option_master om ON im.instrument_id = om.instrument_id
+            WHERE im.underlying = $1
+              AND im.instrument_type = $2
+              AND om.strike_price = $3
+              AND DATE(c.timestamp) = $4
+              AND c.timestamp >= $5
+            ORDER BY c.timestamp
+            LIMIT 20
+        ''', symbol, trade['option_type'], trade['strike_price'], trade_date, trade['entry_time'])
+        
+        if option_candles:
+            print(f"\nFirst 20 candles after entry ({trade['entry_time']}):")
+            for i, oc in enumerate(option_candles):
+                pnl = ((oc['close'] - trade['entry_premium']) / trade['entry_premium']) * 100
+                marker = "❌ STOP LOSS!" if pnl <= -40 else ("✅ TARGET!" if pnl >= 50 else "")
+                print(f"  {oc['timestamp']} | Close: {oc['close']:7.2f} | P&L: {pnl:+6.2f}% {marker}")
+    
+    await pool.close()
 
-def analyze_entry_point(stock, entry_time):
-    logger.info(f"FORENSIC ANALYSIS: {stock} at {entry_time}")
-    
-    conn = sqlite3.connect(DB_PATH)
-    # Get data around the entry time (need history for indicators)
-    query = """
-        SELECT timestamp, open, high, low, close, volume 
-        FROM candle_data 
-        WHERE symbol = ? 
-        AND timestamp <= ?
-        ORDER BY timestamp DESC
-        LIMIT 300
-    """
-    df = pd.read_sql_query(query, conn, params=(f"NSE:{stock}-EQ", entry_time))
-    conn.close()
-    
-    df = df.iloc[::-1].reset_index(drop=True) # Reverse to chronological order
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    
-    # Calculate ALL Indicators Manually
-    
-    # 1. EMAs
-    df['ema_9'] = df['close'].ewm(span=9, adjust=False).mean()
-    df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
-    df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
-    
-    # 2. RSI
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-    
-    # 3. MACD
-    ema_12 = df['close'].ewm(span=12, adjust=False).mean()
-    ema_26 = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = ema_12 - ema_26
-    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-    df['macd_hist'] = df['macd'] - df['macd_signal']
-    
-    # 4. Bollinger Bands
-    sma_20 = df['close'].rolling(window=20).mean()
-    std_20 = df['close'].rolling(window=20).std()
-    df['bb_upper'] = sma_20 + (std_20 * 2)
-    df['bb_lower'] = sma_20 - (std_20 * 2)
-    
-    # 5. VWAP (Cumulative for the loaded period)
-    typical_price = (df['high'] + df['low'] + df['close']) / 3
-    df['vwap'] = (typical_price * df['volume']).cumsum() / df['volume'].cumsum()
-    
-    # 6. Volume MA
-    df['vol_ma'] = df['volume'].rolling(window=20).mean()
-    
-    # Get the specific entry row
-    entry_row = df[df['timestamp'] == pd.to_datetime(entry_time)].iloc[0]
-    prev_row = df[df['timestamp'] == pd.to_datetime(entry_time)].shift(1).iloc[0]
-    
-    # Print Report
-    logger.info(f"\n{'='*60}")
-    logger.info(f"INDICATOR STATE AT {entry_time}")
-    logger.info(f"{'='*60}")
-    
-    print(f"Price:      {entry_row['close']:.2f}")
-    print(f"VWAP:       {entry_row['vwap']:.2f}  (Diff: {((entry_row['close']-entry_row['vwap'])/entry_row['vwap'])*100:.2f}%)")
-    print(f"EMA 200:    {entry_row['ema_200']:.2f}  (Trend: {'BULLISH' if entry_row['close'] > entry_row['ema_200'] else 'BEARISH'})")
-    print(f"EMA 9/21:   {entry_row['ema_9']:.2f} / {entry_row['ema_21']:.2f} ({'CROSSOVER' if entry_row['ema_9'] > entry_row['ema_21'] else 'BEARISH'})")
-    print(f"RSI:        {entry_row['rsi']:.2f}")
-    print(f"MACD:       {entry_row['macd']:.2f} (Hist: {entry_row['macd_hist']:.2f})")
-    print(f"Bollinger:  Upper {entry_row['bb_upper']:.2f} | Lower {entry_row['bb_lower']:.2f}")
-    print(f"Volume:     {entry_row['volume']} (vs Avg: {entry_row['vol_ma']:.0f})")
-    
-    logger.info(f"\n{'='*60}")
-    logger.info("POTENTIAL TRIGGERS IDENTIFIED")
-    logger.info(f"{'='*60}")
-    
-    triggers = []
-    
-    # Check VWAP
-    if entry_row['close'] < entry_row['vwap']:
-        triggers.append(f"✅ VWAP Reversion: Price below VWAP (Undervalued)")
-    elif entry_row['close'] > entry_row['vwap']:
-        triggers.append(f"✅ VWAP Breakout: Price above VWAP")
-        
-    # Check RSI
-    if entry_row['rsi'] < 30:
-        triggers.append(f"✅ RSI Oversold (<30)")
-    elif entry_row['rsi'] > 70:
-        triggers.append(f"✅ RSI Overbought (>70)")
-    elif entry_row['rsi'] > 50 and prev_row['rsi'] <= 50:
-        triggers.append(f"✅ RSI Bullish Cross (>50)")
-        
-    # Check MACD
-    if entry_row['macd'] > entry_row['macd_signal']:
-        triggers.append(f"✅ MACD Bullish")
-        if prev_row['macd'] <= prev_row['macd_signal']:
-             triggers.append(f"🚀 MACD FRESH CROSSOVER")
-             
-    # Check BB
-    if entry_row['close'] < entry_row['bb_lower']:
-        triggers.append(f"✅ BB Oversold (Below Lower Band)")
-    elif entry_row['close'] > entry_row['bb_upper']:
-        triggers.append(f"✅ BB Breakout (Above Upper Band)")
-        
-    # Check Volume
-    if entry_row['volume'] > entry_row['vol_ma'] * 1.5:
-        triggers.append(f"✅ Volume Spike (>1.5x Avg)")
-        
-    for t in triggers:
-        print(t)
-
-# Run analysis
-analyze_entry_point("HEROMOTOCO", "2025-11-17 09:17:00")
+asyncio.run(analyze_trade())
