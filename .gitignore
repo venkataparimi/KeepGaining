@@ -145,3 +145,4 @@ backend/*.txt
 
 # Generated data files (progress, status)
 backend/scripts/data/*.json
+backend/data/*.json

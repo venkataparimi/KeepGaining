@@ -2,6 +2,7 @@ from typing import Dict, Type
 from app.strategies.base import BaseStrategy
 from app.strategies.straddle import ShortStraddleStrategy
 from app.strategies.ema_option_buyer import EMAOptionBuyingStrategy
+from app.strategies.emos_strategy import EMOSStrategy
 
 class StrategyRegistry:
     """
@@ -10,7 +11,8 @@ class StrategyRegistry:
     """
     _strategies = {
         "ShortStraddle": ShortStraddleStrategy,
-        "EMAOptionBuying": EMAOptionBuyingStrategy
+        "EMAOptionBuying": EMAOptionBuyingStrategy,
+        "EMOS": EMOSStrategy
     }
 
     @classmethod

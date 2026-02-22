@@ -156,13 +156,15 @@ def get_upstox_token() -> Optional[str]:
 async def build_instrument_key_cache() -> Dict[str, str]:
     """
     Build trading_symbol to instrument_key mapping from Upstox instrument master.
+    Loads BOTH NSE and BSE instrument files to cover all F&O symbols
+    (NSE F&O: NIFTY/BANKNIFTY/stocks, BSE F&O: SENSEX/BANKEX options).
     """
     global _instrument_key_cache
     
     if _instrument_key_cache:
         return _instrument_key_cache
     
-    logger.info("Building instrument key cache from Upstox...")
+    logger.info("Building instrument key cache from Upstox (NSE + BSE)...")
     
     cache = {}
     
@@ -174,38 +176,51 @@ async def build_instrument_key_cache() -> Dict[str, str]:
     }
     cache.update(index_mapping)
     
+    # Load both NSE and BSE instrument files
+    exchange_urls = [
+        ("NSE", "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"),
+        ("BSE", "https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz"),
+    ]
+    
+    fo_count = 0
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
-        # Download NSE instruments - this includes EQ, INDEX, and FO
-        nse_url = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
-        try:
-            logger.info(f"Downloading instruments from {nse_url}...")
-            async with session.get(nse_url) as response:
-                if response.status == 200:
-                    content = await response.read()
-                    with gzip.GzipFile(fileobj=io.BytesIO(content)) as f:
-                        data = json.loads(f.read().decode('utf-8'))
-                    
-                    for item in data:
-                        trading_symbol = item.get('trading_symbol', '')
-                        instrument_key = item.get('instrument_key', '')
+        for exchange_name, url in exchange_urls:
+            try:
+                logger.info(f"Downloading {exchange_name} instruments from {url}...")
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        content = await response.read()
+                        with gzip.GzipFile(fileobj=io.BytesIO(content)) as f:
+                            data = json.loads(f.read().decode('utf-8'))
                         
-                        if trading_symbol and instrument_key:
-                            cache[trading_symbol] = instrument_key
-                            # Also store uppercase version for safety
-                            cache[trading_symbol.upper()] = instrument_key
-                    
-                    logger.info(f"Built cache with {len(cache)} entries from {len(data)} instruments")
-                    
-                    if 'RELIANCE' in cache:
-                        logger.info(f"✅ RELIANCE found in Upstox cache: {cache['RELIANCE']}")
+                        added = 0
+                        for item in data:
+                            trading_symbol = item.get('trading_symbol', '')
+                            instrument_key = item.get('instrument_key', '')
+                            inst_type = item.get('instrument_type', '')
+                            
+                            if trading_symbol and instrument_key:
+                                cache[trading_symbol] = instrument_key
+                                cache[trading_symbol.upper()] = instrument_key
+                                added += 1
+                                if inst_type in ('CE', 'PE', 'FUT'):
+                                    fo_count += 1
+                        
+                        logger.info(f"  {exchange_name}: loaded {added:,} entries from {len(data):,} instruments")
                     else:
-                        logger.error("❌ RELIANCE NOT found in Upstox cache!")
-                        # Debug: print first 5 keys
-                        keys = list(cache.keys())[:5]
-                        logger.info(f"Sample keys: {keys}")
-        except Exception as e:
-            logger.error(f"Failed to download NSE instruments: {e}")
-            raise
+                        logger.error(f"  {exchange_name}: HTTP {response.status}")
+            except Exception as e:
+                logger.error(f"Failed to download {exchange_name} instruments: {e}")
+                if exchange_name == 'NSE':
+                    raise  # NSE is required; BSE is optional
+    
+    logger.info(f"Total cache: {len(cache):,} entries | F&O instruments: {fo_count:,}")
+    
+    # Spot-check
+    if 'RELIANCE' in cache:
+        logger.info(f"[OK] RELIANCE equity: {cache['RELIANCE']}")
+    else:
+        logger.error("[ERR] RELIANCE NOT found in cache!")
     
     _instrument_key_cache = cache
     return cache
@@ -235,8 +250,10 @@ async def get_instruments_to_backfill(pool, mode: str) -> List[Dict[str, Any]]:
         today = date.today()
         
         if mode == 'current':
-            # Get instruments for current expiries (next 60 days)
-            future_cutoff = today + timedelta(days=60)
+            # Get instruments for current + next expiries (next 90 days)
+            # 90 days ensures the next monthly expiry is always included
+            # e.g. from Feb 19, April 28 is 68 days out — needs >60d window
+            future_cutoff = today + timedelta(days=90)
             
             query = '''
                 SELECT 
@@ -254,7 +271,7 @@ async def get_instruments_to_backfill(pool, mode: str) -> List[Dict[str, Any]]:
             '''
             rows = await conn.fetch(query)
             
-            # Filter to current expiries
+            # Filter to current expiries within 90-day window
             instruments = []
             for r in rows:
                 expiry = parse_expiry_from_symbol(r['trading_symbol'])
@@ -464,7 +481,7 @@ async def download_candles_for_instrument(
     to_date: date,
     rate_limiter: RateLimiter
 ) -> Optional[List[Dict[str, Any]]]:
-    """Download candle data for an instrument from Upstox."""
+    """Download candle data for an instrument from Upstox (auto-chunking >30 days)."""
     
     instrument_key = await get_instrument_key(
         instrument['trading_symbol'],
@@ -474,52 +491,65 @@ async def download_candles_for_instrument(
     if not instrument_key:
         return None
     
-    from_str = from_date.strftime('%Y-%m-%d')
-    to_str = to_date.strftime('%Y-%m-%d')
+    # Upstox API limit: max 30 days per call
+    # We must chunk the request if range > 30 days
+    all_candles = []
+    current_to = to_date
     
-    url = f"https://api.upstox.com/v2/historical-candle/{instrument_key}/1minute/{to_str}/{from_str}"
+    while current_to >= from_date:
+        # Calculate chunk start (max 30 days back from current_to)
+        chunk_from = max(from_date, current_to - timedelta(days=29))
+        
+        from_str = chunk_from.strftime('%Y-%m-%d')
+        to_str = current_to.strftime('%Y-%m-%d')
+        
+        url = f"https://api.upstox.com/v2/historical-candle/{instrument_key}/1minute/{to_str}/{from_str}"
+        headers = {
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {token}'
+        }
+        
+        await rate_limiter.wait()
+        
+        try:
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    candles = data.get('data', {}).get('candles', [])
+                    if candles:
+                        # Convert to our format
+                        for candle in candles:
+                            all_candles.append({
+                                'timestamp': datetime.fromisoformat(candle[0].replace('Z', '+00:00')),
+                                'open': float(candle[1]),
+                                'high': float(candle[2]),
+                                'low': float(candle[3]),
+                                'close': float(candle[4]),
+                                'volume': int(candle[5]),
+                                'oi': int(candle[6]) if len(candle) > 6 else 0
+                            })
+                elif response.status == 429:
+                    rate_limiter.trigger_backoff(10.0)
+                    logger.warning(f"Rate limited (429) on {instrument['trading_symbol']}, backing off 10s...")
+                    await asyncio.sleep(10)
+                    # Retry this chunk loop iteration
+                    continue
+                elif response.status in (401, 403):
+                    logger.error(f"FATAL: Upstox API token is invalid or expired (HTTP {response.status}).")
+                    raise Exception("Upstox API Token Expired")
+                else:
+                    # Log error but continue to next chunks if any
+                    logger.error(f"API {response.status} for {instrument['trading_symbol']} [{from_str} to {to_str}]")
+        
+        except Exception as e:
+            logger.error(f"Request failed for {instrument['trading_symbol']}: {e}")
+        
+        # Move window back
+        current_to = chunk_from - timedelta(days=1)
     
-    headers = {
-        'Accept': 'application/json',
-        'Authorization': f'Bearer {token}'
-    }
-    
-    await rate_limiter.wait()
-    
-    try:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                data = await response.json()
-                candles = data.get('data', {}).get('candles', [])
-                
-                result = []
-                for candle in candles:
-                    result.append({
-                        'timestamp': datetime.fromisoformat(candle[0].replace('Z', '+00:00')),
-                        'open': float(candle[1]),
-                        'high': float(candle[2]),
-                        'low': float(candle[3]),
-                        'close': float(candle[4]),
-                        'volume': int(candle[5]),
-                        'oi': int(candle[6]) if len(candle) > 6 else 0
-                    })
-                return result
-            
-            elif response.status == 429:
-                # Trigger backoff in rate limiter
-                rate_limiter.trigger_backoff(10.0)  # 10 second backoff
-                logger.warning(f"Rate limited (429) on {instrument['trading_symbol']}, backing off 10s...")
-                await asyncio.sleep(10)
-                # Don't retry immediately, let the caller handle it
-                return []
-            
-            else:
-                logger.error(f"API {response.status} for {instrument['trading_symbol']}")
-                return []
-    
-    except Exception as e:
-        logger.error(f"Network error {instrument['trading_symbol']}: {e}")
-        return []
+    # Deduplicate by timestamp just in case of overlap
+    unique_candles = {c['timestamp']: c for c in all_candles}
+    return sorted(unique_candles.values(), key=lambda x: x['timestamp'])
 
 
 async def save_candles_to_db(conn, instrument_id, candles: List[Dict[str, Any]], timeframe: str = '1m') -> int:
@@ -736,7 +766,9 @@ async def run_backfill(mode: str, dry_run: bool = False, limit: int = 0) -> Dict
 
         # Logic for 'all' or specific modes
         if mode in ('current', 'all'):
-            await run_phase("Current Expiry F&O", 'current', 30)
+            # 90-day lookback: covers the full history of any new instrument
+            # (April contracts listed ~90 days before expiry, need full history)
+            await run_phase("Current Expiry F&O", 'current', 90)
         
         if mode in ('equity', 'all'):
             # Logic tailored for equity (lookback 7 days usually enough if running daily)

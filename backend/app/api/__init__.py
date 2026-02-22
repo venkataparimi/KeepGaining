@@ -6,8 +6,9 @@ from app.api.routes import (
     broker_management, upstox, calendar, data, trading_execution, websocket,
     dashboard, settings, alerts, trade_chart, trade_analytics, live_trading,
     futures, audit, cache, advanced_analytics, multi_broker, strategy_trades,
-    historical_data, master_data
+    historical_data, master_data, emos
 )
+
 from app.api import comet
 
 api_router = APIRouter()
@@ -54,4 +55,6 @@ api_router.include_router(advanced_analytics.router, prefix="/advanced-analytics
 api_router.include_router(multi_broker.router, prefix="/multi-broker", tags=["multi-broker"])
 # Strategy Trades API (backtest results, trade history, analytics)
 api_router.include_router(strategy_trades.router, tags=["strategy-trades"])
+# EMOS Strategy API
+api_router.include_router(emos.router, prefix="/emos", tags=["emos"])
 

@@ -25,6 +25,7 @@ import argparse
 import asyncio
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -45,16 +46,32 @@ logger = logging.getLogger(__name__)
 # Config paths
 CONFIG_FILE = Path(__file__).parent / 'data' / 'sync_status.json'
 
-# Segment definitions
+# Segment definitions - order matters
 SEGMENTS = [
+    'fo_refresh_instruments',  # Standalone instrument refresh (fo_current also does this automatically)
     'equity',
-    'indices_nse', 
+    'indices_nse',
     'indices_bse',
-    'fo_current',
-    'fo_historical',
-    'fo_expired',
+    'fo_current',       # Daily: refresh instruments from Upstox, then sync data (next 60 days)
+    'fo_historical',    # Manual only: heavy historical backfill
+    'fo_expired',       # Weekly: sync expired index option expiries
     'indicators'
 ]
+
+# Segments that run weekly (not daily)
+WEEKLY_SEGMENTS = {'fo_refresh_instruments', 'fo_expired', 'fo_historical'}
+
+# Default stale thresholds per segment (hours)
+SEGMENT_THRESHOLDS = {
+    'fo_refresh_instruments': 24 * 7,  # Weekly
+    'equity': 20,
+    'indices_nse': 20,
+    'indices_bse': 20,
+    'fo_current': 20,
+    'fo_historical': 24 * 7,           # Weekly
+    'fo_expired': 24 * 7,              # Weekly
+    'indicators': 20,
+}
 
 
 def load_config() -> Dict[str, Any]:
@@ -173,16 +190,105 @@ async def sync_indices_bse(config: Dict, dry_run: bool = False) -> int:
         return 0
 
 
-async def sync_fo_current(config: Dict, dry_run: bool = False) -> int:
-    """Sync current expiry F&O (futures + options)."""
+async def sync_fo_refresh_instruments(config: Dict, dry_run: bool = False) -> int:
+    """Refresh F&O instrument master from Upstox (NSE + BSE).
+    
+    Fetches the latest F&O contracts from Upstox for both NSE and BSE,
+    then upserts new instruments into instrument_master. This ensures:
+    - New weekly expiries are added as they become available
+    - New monthly contracts (next month) are added
+    - SENSEX, BANKEX, FINNIFTY, MIDCPNIFTY options are included
+    - Stock options for all F&O eligible stocks are included
+    
+    Runs weekly (not daily) since instrument lists change slowly.
+    """
     logger.info("=" * 60)
-    logger.info("SYNCING: Current Expiry F&O (Futures + Options)")
+    logger.info("SYNCING: F&O Instrument Master Refresh (NSE + BSE)")
     logger.info("=" * 60)
     
     if dry_run:
-        logger.info("  [DRY RUN] Would sync ~1500 current F&O instruments")
-        return 1500
+        logger.info("  [DRY RUN] Would fetch F&O instruments from Upstox and import new contracts")
+        return 0
     
+    import subprocess
+    result = subprocess.run(
+        [sys.executable, 'scripts/import_upstox_fno.py'],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        timeout=600  # 10 min timeout
+    )
+    
+    if result.returncode == 0:
+        # Parse count of new instruments from output
+        new_count = 0
+        for line in result.stdout.splitlines():
+            if 'New instruments to insert:' in line:
+                try:
+                    new_count = int(line.split(':')[1].strip().replace(',', ''))
+                except:
+                    pass
+        logger.info(f"  Instrument refresh complete. New instruments: {new_count}")
+        if result.stdout:
+            # Log last few lines of output for visibility
+            tail = result.stdout.strip().splitlines()[-10:]
+            for line in tail:
+                logger.info(f"  {line}")
+        return new_count
+    else:
+        logger.error(f"Instrument refresh failed: {result.stderr[:500]}")
+        return 0
+
+
+async def sync_fo_current(config: Dict, dry_run: bool = False) -> int:
+    """Sync current expiry F&O (futures + options, next 60 days).
+    
+    Step 1: Refresh instrument list from Upstox — picks up any new weekly/monthly
+            expiries not yet in instrument_master (runs import_upstox_fno.py).
+    Step 2: Sync candle data for all instruments with missing or stale data.
+    """
+    logger.info("=" * 60)
+    logger.info("SYNCING: Current Expiry F&O (Futures + Options)")
+    logger.info("=" * 60)
+
+    if dry_run:
+        logger.info("  [DRY RUN] Would refresh instruments then sync F&O data (next 60 days)")
+        return 1500
+
+    # ── Step 1: Refresh instruments from Upstox ──────────────────────────────
+    # Ensures new expiries (weekly options that just appeared, next-month
+    # contracts etc.) are in instrument_master BEFORE data download starts.
+    logger.info("")
+    logger.info("  Step 1/2: Refreshing F&O instrument list from Upstox...")
+    refresh_result = subprocess.run(
+        [sys.executable, 'scripts/import_upstox_fno.py'],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        timeout=600
+    )
+    if refresh_result.returncode == 0:
+        new_count = 0
+        for line in refresh_result.stdout.splitlines():
+            if 'New instruments to insert:' in line:
+                try:
+                    new_count = int(line.split(':')[1].strip().replace(',', ''))
+                except Exception:
+                    pass
+        logger.info(f"  Instrument refresh complete — new instruments added: {new_count}")
+    else:
+        logger.warning(
+            f"  Instrument refresh had errors (continuing anyway):\n"
+            f"  {refresh_result.stderr[:300]}"
+        )
+
+    # ── Step 2: Sync candle data ──────────────────────────────────────────────
+    logger.info("")
+    logger.info("  Step 2/2: Syncing candle data for active F&O instruments (next 60 days)...")
     from scripts.backfill_all_data import run_backfill
     result = await run_backfill('current')
     count = result.get('stats', {}).get('current', {}).get('downloaded', 0)
@@ -411,6 +517,7 @@ async def sync_fo_expired(config: Dict, dry_run: bool = False) -> int:
 
 # Segment sync function mapping
 SYNC_FUNCTIONS = {
+    'fo_refresh_instruments': sync_fo_refresh_instruments,
     'equity': sync_equity,
     'indices_nse': sync_indices_nse,
     'indices_bse': sync_indices_bse,
@@ -451,6 +558,9 @@ async def run_sync(
             continue
         
         seg_config = config.get('segments', {}).get(segment, {})
+        
+        # Use per-segment threshold, falling back to global config
+        threshold = SEGMENT_THRESHOLDS.get(segment, config.get('sync_config', {}).get('stale_threshold_hours', 20))
         
         # Check if sync is needed
         needs_sync = force or is_stale(seg_config, threshold)
